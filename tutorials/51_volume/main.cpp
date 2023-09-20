@@ -25,7 +25,7 @@ int main()
 {
 	//	for Debugging you can enable Radeon ProRender API trace
 	//	set this before any RPR API calls
-	//	rprContextSetParameterByKey1u(0,RPR_CONTEXT_TRACING_ENABLED,1);
+	rprContextSetParameterByKey1u(0,RPR_CONTEXT_TRACING_ENABLED,1);
 
 
 	// the RPR context object.
@@ -46,6 +46,14 @@ int main()
 
 	std::cout << "RPR Context creation succeeded." << std::endl;
 
+
+	char deviceName_gpu0[1024]; deviceName_gpu0[0] = 0;
+	CHECK(rprContextGetInfo(context, RPR_CONTEXT_GPU1_NAME, sizeof(deviceName_gpu0), deviceName_gpu0, 0));
+
+	// Output the name of the GPU
+	std::cout << "GPU0 name : " << std::string(deviceName_gpu0) << std::endl;
+
+	// Release the stuff we created
 	// Create material system
 	rpr_material_system matsys = 0;
 	CHECK( rprContextCreateMaterialSystem(context, 0, &matsys));
@@ -227,7 +235,7 @@ int main()
 
 	// resolve and save the rendering to an image file.
 	CHECK(rprContextResolveFrameBuffer(context,frame_buffer,frame_buffer_resolved,false));
-	CHECK(rprFrameBufferSaveToFile(frame_buffer_resolved,"51_00.png"));
+	CHECK(rprFrameBufferSaveToFile(frame_buffer_resolved,"../../51_00.png"));
 
 
 	// Release the stuff we created

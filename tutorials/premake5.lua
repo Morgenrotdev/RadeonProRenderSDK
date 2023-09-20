@@ -109,6 +109,8 @@ solution "Tutorials"
  	include "63_hybrid"
     include "64_mesh_obj_demo"
 
+	include "99_test"
+
 	if fileExists("./MultiTutorials/MultiTutorials.lua") then
 		dofile("./MultiTutorials/MultiTutorials.lua")
 	end
