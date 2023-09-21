@@ -26,9 +26,9 @@ int main() {
     xl = 6.0;
     yl = 3.0;
     zl = 3.0;
-    dnx = 20.0;
-    dny = 20.0;
-    dnz = 20.0;
+    dnx = 5.0;
+    dny = 2.5;
+    dnz = 2.5;
     dx = unit / dnx;
     dy = unit / dny;
     dz = unit / dnz;

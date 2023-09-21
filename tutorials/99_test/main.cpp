@@ -474,7 +474,7 @@ int main(int argc, char** argv)
 		&cube));
 
 	// bounds of volume will always be a box defined by the rprShapeSetTransform
-	RadeonProRender::matrix cubeTransform1 = RadeonProRender::translation(RadeonProRender::float3(0, +0.0f, 0)) * RadeonProRender::rotation_y(0.0f) * RadeonProRender::scale(RadeonProRender::float3(30.0f, 30.0f, 30.0f));
+	RadeonProRender::matrix cubeTransform1 = RadeonProRender::translation(RadeonProRender::float3(0, +0.0f, 0)) * RadeonProRender::rotation_y(0.0f) * RadeonProRender::scale(RadeonProRender::float3(5.0f, 2.5f, 2.5f));
 	CHECK(rprShapeSetTransform(cube, true, &cubeTransform1.m00));
 	CHECK(rprSceneAttachShape(g_scene, cube));
 
@@ -519,7 +519,7 @@ int main(int argc, char** argv)
 
 	int xmax, ymax, zmax, xstart, ystart, zstart, xend, yend, zend;
 	std::vector<double> xd, yd, zd;
-	std::vector<int>bcd;
+	std::vector<float>bcd;
 	std::ifstream mesh;
 	std::string line;
 	char* dirmesh = "../99_test/gridbc_ascii.dat";
@@ -565,19 +565,22 @@ int main(int argc, char** argv)
 			int bcdi = 0;
 			sscanf(line.c_str(), "%lf  %lf  %lf  %d", &xi, &yi, &zi, &bcdi);
 			/* store the vb*/
-			index = i - 3;
-			xd[index] = xi;
-			yd[index] = yi;
-			zd[index] = zi;
+			//index = i - 3;
+			//xd[index] = xi;
+			//yd[index] = yi;
+			//zd[index] = zi;
 			//indicesList.push_back(float(xi));
 			//indicesList.push_back(float(yi));
 			//indicesList.push_back(float(zi));
-			bcd[index] = bcdi;
+			bcd[index] = float(bcdi);
 			/*gridVector1.push_back((float)bcdi);
 			gridVector2.push_back((float)bcdi);*/
+			gridVector1.push_back(4.0/4.0);
+			gridVector2.push_back(bcdi/4.0);
 		}
 		i++;
 	}
+	//int j = 0;
 	for (unsigned int z = 0; z < zmax; z++)
 	{
 		for (unsigned int y = 0; y < ymax; y++)
@@ -587,8 +590,9 @@ int main(int argc, char** argv)
 				indicesList.push_back(x);
 				indicesList.push_back(y);
 				indicesList.push_back(z);
-				gridVector1.push_back(1.0f);
-				gridVector2.push_back((float)y / (float)ymax);
+				//gridVector1.push_back(bcd[j]/4.0);
+				//gridVector2.push_back(bcd[j]/4.0);
+				//j++;
 			}
 		}
 	}
@@ -652,8 +656,8 @@ int main(int argc, char** argv)
 	CHECK(rprMaterialNodeSetInputNByKey(rampSampler2, RPR_MATERIAL_INPUT_UV, gridSampler2));
 
 	// for ramp texture, it's better to clamp it to edges.
-	//CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_U, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
-	//CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_V, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
+	CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_U, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
+	CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_V, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
 
 	// create the Volume material
 	rpr_material_node materialVolume = NULL;
