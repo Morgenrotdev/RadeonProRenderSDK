@@ -52,8 +52,8 @@
 
 //const unsigned int WINDOW_WIDTH = 640;
 //const unsigned int WINDOW_HEIGHT = 480;
-const unsigned int WINDOW_WIDTH  = 80*10;
-const unsigned int WINDOW_HEIGHT = 60*10;
+const unsigned int WINDOW_WIDTH  = 80*16;
+const unsigned int WINDOW_HEIGHT = 60*16;
 
 void Display();
 void OnExit();
@@ -113,16 +113,64 @@ auto g_benchmark_start = g_invalidTime;
 
 //202309
 const size_t n = 128;
-float atomposi[] = {
-	20.0f,30.0f,60.0f,
-	20.0f,40.0f,70.0f,
-	40.0f,30.0f,60.0f,
-	50.0f,70.0f,80.0f,
-	50.0f,80.0f,90.0f,
-	70.0f,70.0f,80.0f,
+float surf_posi[] = {
+	10.0f,10.0f,
+	10.0f,20.0f,
+	10.0f,30.0f,
+	10.0f,40.0f,
+	10.0f,50.0f,
+	20.0f,10.0f,
+	20.0f,20.0f,
+	20.0f,30.0f,
+	20.0f,40.0f,
+	20.0f,50.0f,
+	30.0f,10.0f,
+	30.0f,20.0f,
+	30.0f,30.0f,
+	30.0f,40.0f,
+	30.0f,50.0f,
+	40.0f,10.0f,
+	40.0f,20.0f,
+	40.0f,30.0f,
+	40.0f,40.0f,
+	40.0f,50.0f,
+	50.0f,10.0f,
+	50.0f,20.0f,
+	50.0f,30.0f,
+	50.0f,40.0f,
+	50.0f,50.0f,
 };
-const int atomnum = sizeof(atomposi) / 3.0f;
-const float atomrad = 20.0f;
+float surf_height[] = {
+	10.0f,
+	40.0f,
+	60.0f,
+	20.0f,
+	70.0f, //
+	30.0f,
+	60.0f,
+	80.0f,
+	20.0f,
+	50.0f, //
+	10.0f,
+	30.0f,
+	60.0f,
+	40.0f,
+	70.0f, //
+	30.0f,
+	40.0f,
+	80.0f,
+	20.0f,
+	90.0f, //
+	20.0f,
+	50.0f,
+	80.0f,
+	40.0f,
+	60.0f, //
+};
+const int numpics = sizeof(surf_posi) / 2.0f;
+const float xpitch = 10.0f;
+const float ypitch = 10.0f;
+const float zmax = 80.0f;
 
 
 struct MOUSE_DRAG_INFO
@@ -771,7 +819,7 @@ int main(int argc, char** argv)
 		//
 		//processKernel << <gridDim, blockDim >> > (atomnum, n, d_atomposi, d_indicesList, d_gridVector1, d_gridVector2);
 
-		for (unsigned int i = 0; i < atomnum; i++)
+		for (unsigned int i = 0; i < numpics; i++)
 		{
 			for (unsigned int x = 0; x < n; x++)
 			{
@@ -779,32 +827,29 @@ int main(int argc, char** argv)
 				{
 					for (unsigned int z = 0; z < n; z++)
 					{
-						const int j = i * 3;
-						float radius = sqrtf(((float)x - (float)atomposi[j]) * ((float)x - (float)atomposi[j])
-									    	+ ((float)y - (float)atomposi[j+1]) * ((float)y - (float)atomposi[j+1])
-									    	+ ((float)z - (float)atomposi[j+2]) * ((float)z - (float)atomposi[j+2]));
-						if (radius < atomrad)
+						const int j = i * 2;
+						float xedge1 = ((float)surf_posi[j] - (float)xpitch / 2.0f);
+						float xedge2 = ((float)surf_posi[j] + (float)xpitch / 2.0f);
+						float zedge1 = ((float)surf_posi[j+1] - (float)ypitch / 2.0f);
+						float zedge2 = ((float)surf_posi[j+1] + (float)ypitch / 2.0f);
+
+						float yedge1 =  0.0f;
+						float yedge2 = surf_height[i];
+
+						if (xedge1 <= x && x < xedge2 && yedge1 <= y && y < yedge2 && zedge1 <= z && z < zedge2)
 						{
 							indicesList.push_back(x);
 							indicesList.push_back(y);
 							indicesList.push_back(z);
 		
-							//if (radius <= atomrad)
-							//{
-							//	gridVector1.push_back(1.0f);
-							//}
-							//else
-							//{
-							//	gridVector1.push_back(0.0f);
-							//}
-		
 							gridVector1.push_back(1.0f); 
-							gridVector2.push_back(1.0f);// (float)j / (float)atomnum);
+							gridVector2.push_back(1.0f * z / zmax);
 						}
 					}
 				}
 			}
 		}
+
 
 		// this first grid defines a cylinder
 		rpr_grid rprgrid1 = 0;

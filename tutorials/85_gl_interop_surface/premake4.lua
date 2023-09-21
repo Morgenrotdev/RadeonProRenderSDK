@@ -1,11 +1,11 @@
-project "80_gl_interop_molecule"
+project "85_gl_interop_surface"
     kind "ConsoleApp"
     location "../build"
-    files { "../80_gl_interop_molecule/**.h", "../80_gl_interop_molecule/**.cpp"} 
+    files { "../85_gl_interop_surface/**.h", "../85_gl_interop_surface/**.cpp"} 
     files { "../common/common.cpp","../common/common.h"}
 
     -- remove filters for Visual Studio
-    vpaths { [""] = { "../80_gl_interop_molecule/**.h", "../80_gl_interop_molecule/**.cpp","../common/common.cpp","../common/common.h"} }
+    vpaths { [""] = { "../85_gl_interop_surface/**.h", "../85_gl_interop_surface/**.cpp","../common/common.cpp","../common/common.h"} }
 
 
     includedirs{ "../../RadeonProRender/inc" } 
