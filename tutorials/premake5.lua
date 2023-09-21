@@ -108,6 +108,8 @@ solution "Tutorials"
 	include "61_mesh_import"
  	include "63_hybrid"
     include "64_mesh_obj_demo"
+	include "80_gl_interop_molecule"
+	include "99_test"
 
 	if fileExists("./MultiTutorials/MultiTutorials.lua") then
 		dofile("./MultiTutorials/MultiTutorials.lua")

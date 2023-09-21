@@ -49,7 +49,7 @@
 // RPR_CREATION_FLAGS_ENABLE_CPU <- use the first CPU only
 // RPR_CREATION_FLAGS_ENABLE_GPU0 | RPR_CREATION_FLAGS_ENABLE_CPU <- use the first CPU+GPU
 // RPR_CREATION_FLAGS_ENABLE_GPU0 | RPR_CREATION_FLAGS_ENABLE_GPU1 <-- use 2 GPU
-const rpr_creation_flags g_ContextCreationFlags = RPR_CREATION_FLAGS_ENABLE_GPU0
+const rpr_creation_flags g_ContextCreationFlags = RPR_CREATION_FLAGS_ENABLE_GPU1
 	#if defined(USING_NORTHSTAR) && defined(__APPLE__)
 	| RPR_CREATION_FLAGS_ENABLE_METAL // by default always enable Metal for MacOS
 	#endif
@@ -217,8 +217,21 @@ rpr_status CreateAMDFloor(
 	float translationX=0.0f, float translationY=0.0f, float translationZ=0.0f
 	);
 
+const std::string pathImageFileA = "../../Resources/Textures/amd.png";
+// Create a simple plane with RPR logo as texture. commonly used by several demos.
+rpr_status CreateAMDFloorIN(
+	rpr_context context,
+	rpr_scene scene,
+	rpr_material_system matsys,
+	RPRGarbageCollector& gc,
+	float scaleX, float scaleY,
+	float translationX=0.0f, float translationY=0.0f, float translationZ=0.0f,
+	std::string pathImageFileA=""
+	);
+
 // Create an environment light from an HDR image. commonly used by several demos.
 rpr_status CreateNatureEnvLight(rpr_context context, rpr_scene scene, RPRGarbageCollector& gc, float power);
+rpr_status CreateNatureEnvLightIN(rpr_context context, rpr_scene scene, RPRGarbageCollector& gc, float power, std::string pathImageFile = "");
 
 // some helper functions to create quads meshes easily
 rpr_shape CreateQuad(RPRGarbageCollector& gc, rpr_context context, rpr_scene scene, vertex* meshVertices, unsigned int meshVertices_nbOfElement );

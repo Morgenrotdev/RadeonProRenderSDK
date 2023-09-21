@@ -47,8 +47,13 @@
 #include <thread>
 #include <memory>
 
+//#include <cuda_runtime.h>
+//#include <device_launch_parameters.h>
+
 const unsigned int WINDOW_WIDTH = 640;
 const unsigned int WINDOW_HEIGHT = 480;
+//const unsigned int WINDOW_WIDTH  = 800;
+//const unsigned int WINDOW_HEIGHT = 600;
 
 void Display();
 void OnExit();
@@ -106,7 +111,17 @@ const auto g_invalidTime = std::chrono::time_point<std::chrono::high_resolution_
 int					g_benchmark_numberOfRenderIteration = 0;
 auto g_benchmark_start = g_invalidTime;
 
-
+//202309
+float atomposi[] = {
+	10.0f,20.0f,110.0f,
+	10.0f,20.0f,120.0f,
+	20.0f,20.0f,110.0f,
+	50.0f,60.0f,150.0f,
+	50.0f,60.0f,160.0f,
+	60.0f,60.0f,150.0f,
+};
+const int atomnum = sizeof(atomposi) / 3.0f;
+const float atomrad = 10.0f;
 
 
 struct MOUSE_DRAG_INFO
@@ -483,6 +498,53 @@ void OnExit()
 	CHECK(rprObjectDelete(g_context));g_context=nullptr; // Always delete the RPR Context in last.
 }
 
+/*
+
+__global__ void processKernel(unsigned int atomnum, int n, float* atomposi, unsigned int* indicesList, float* gridVector1, float* gridVector2)
+{
+	// Thread identifiers
+	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+	unsigned int z = blockIdx.z * blockDim.z + threadIdx.z;
+
+	// Ensure within grid dimensions
+	if (x < n && y < n && z < n)
+	{
+		for (unsigned int i = 0; i < atomnum; i++)
+		{
+			const int j = i * 3;
+			float radius = sqrtf((x - atomposi[j]) * (x - atomposi[j])
+				+ (y - atomposi[j + 1]) * (y - atomposi[j + 1])
+				+ (z - atomposi[j + 2]) * (z - atomposi[j + 2]));
+
+			if (radius < atomrad)
+			{
+				// NOTE: You cannot directly use push_back() in CUDA.
+				// You might need an atomic operation or preallocated memory to store these values.
+
+				if (radius <= atomrad)
+				{
+					gridVector1[x * n * n + y * n + z] = 1.0f;  // Example of indexing for 3D data
+				}
+				else
+				{
+					gridVector1[x * n * n + y * n + z] = 0.0f;
+				}
+
+				gridVector2[x * n * n + y * n + z] = 1.0f //(float)j / (float)atomnum;
+			}
+		}
+	}
+}
+
+*/
+
+
+
+
+
+
+
 int main(int argc, char** argv)
 {
 	//	enable RPR API trace
@@ -536,8 +598,8 @@ int main(int argc, char** argv)
 	CHECK( rprContextCreateScene(g_context, &g_scene) );
 
 	// Create an environment light
-	CHECK( CreateNatureEnvLight(g_context, g_scene, g_gc, 0.9f) );
-
+	//CHECK( CreateNatureEnvLight(g_context, g_scene, g_gc, 0.9f) );
+	CHECK(CreateNatureEnvLightIN(g_context, g_scene, g_gc, 0.9f, "../../Resources/Textures/amd.png")); //"../../Resources/Textures/turning_area_4k.hdr"
 
 	// Create camera
 	{
@@ -547,7 +609,7 @@ int main(int argc, char** argv)
 		CHECK( rprCameraLookAt(g_camera, 0.0f, 5.0f, 20.0f,    0, 1, 0,   0, 1, 0) );
 
 		// set camera field of view
-		CHECK( rprCameraSetFocalLength(g_camera, 75.f) );
+		CHECK( rprCameraSetFocalLength(g_camera, 30.0f) );
 
 		// Set camera for the scene
 		CHECK( rprSceneSetCamera(g_scene, g_camera) );
@@ -557,65 +619,294 @@ int main(int argc, char** argv)
 
 
 	// create a teapot shape
-	rpr_shape teapot01 = nullptr;
-	{
-		teapot01 = ImportOBJ("../../Resources/Meshes/teapot.obj",g_scene,g_context);
-		g_gc.GCAdd(teapot01);
-
-		RadeonProRender::matrix m0 = RadeonProRender::rotation_x(MY_PI);
-		CHECK(rprShapeSetTransform(teapot01, RPR_TRUE, &m0.m00));
-	}
-
-	// create the floor
-	CHECK( CreateAMDFloor(g_context, g_scene, g_matsys, g_gc, 1.0f, 1.0f)  );
-
+	//rpr_shape teapot01 = nullptr;
+	//{
+	//	teapot01 = ImportOBJ("../../Resources/Meshes/teapot.obj",g_scene,g_context);
+	//	g_gc.GCAdd(teapot01);
+	//
+	//	RadeonProRender::matrix m0 = RadeonProRender::rotation_x(MY_PI);
+	//	CHECK(rprShapeSetTransform(teapot01, RPR_TRUE, &m0.m00));
+	//}
+	//
+	//// create the floor
+	//CHECK( CreateAMDFloor(g_context, g_scene, g_matsys, g_gc, 1.0f, 1.0f)  );
+	//
 	// Create material for the teapot
+	//{
+	//	rpr_image uberMat2_img1 = nullptr;
+	//	CHECK(rprContextCreateImageFromFile(g_context,"../../Resources/Textures/lead_rusted_Base_Color.jpg",&uberMat2_img1));
+	//	g_gc.GCAdd(uberMat2_img1);
+	//
+	//	rpr_image uberMat2_img2 = nullptr;
+	//	CHECK(rprContextCreateImageFromFile(g_context,"../../Resources/Textures/lead_rusted_Normal.jpg",&uberMat2_img2));
+	//	g_gc.GCAdd(uberMat2_img2);
+	//
+	//	rpr_material_node uberMat2_imgTexture1 = nullptr;
+	//	CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_IMAGE_TEXTURE,&uberMat2_imgTexture1));
+	//	g_gc.GCAdd(uberMat2_imgTexture1);
+	//	CHECK(rprMaterialNodeSetInputImageDataByKey(uberMat2_imgTexture1,   RPR_MATERIAL_INPUT_DATA  ,uberMat2_img1));
+	//
+	//	rpr_material_node uberMat2_imgTexture2 = nullptr;
+	//	CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_IMAGE_TEXTURE,&uberMat2_imgTexture2));
+	//	g_gc.GCAdd(uberMat2_imgTexture2);
+	//	CHECK(rprMaterialNodeSetInputImageDataByKey(uberMat2_imgTexture2,   RPR_MATERIAL_INPUT_DATA  ,uberMat2_img2));
+	//
+	//	rpr_material_node matNormalMap = nullptr;
+	//	CHECK( rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_NORMAL_MAP,&matNormalMap));
+	//	g_gc.GCAdd(matNormalMap);
+	//	CHECK( rprMaterialNodeSetInputFByKey(matNormalMap,RPR_MATERIAL_INPUT_SCALE,1.0f,1.0f,1.0f,1.0f));
+	//	CHECK( rprMaterialNodeSetInputNByKey(matNormalMap,RPR_MATERIAL_INPUT_COLOR,uberMat2_imgTexture2));
+	//
+	//	rpr_material_node uberMat2 = nullptr;
+	//	CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_UBERV2,&uberMat2));
+	//	g_gc.GCAdd(uberMat2);
+	//
+	//	CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_COLOR   ,uberMat2_imgTexture1));
+	//	CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_NORMAL   ,matNormalMap));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_WEIGHT    ,1, 1, 1, 1));
+	//
+	//	CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_COLOR  ,uberMat2_imgTexture1));
+	//	CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_NORMAL   ,matNormalMap));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_WEIGHT  ,1, 1, 1, 1));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ROUGHNESS     ,0, 0, 0, 0));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ANISOTROPY    ,0, 0, 0, 0));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ANISOTROPY_ROTATION  ,0, 0, 0, 0));
+	//	CHECK(rprMaterialNodeSetInputUByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_MODE   ,RPR_UBER_MATERIAL_IOR_MODE_METALNESS));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_IOR   ,1.36, 1.36, 1.36, 1.36));
+	//
+	//	CHECK(rprShapeSetMaterial(teapot01, uberMat2));
+	//}
+
+	//CHECK( rprContextSetParameterByKey1f(g_context, RPR_CONTEXT_DISPLAY_GAMMA , 2.2f ) ); // set display gamma
+
+
+	//20230920
+	//Create material
 	{
-		rpr_image uberMat2_img1 = nullptr;
-		CHECK(rprContextCreateImageFromFile(g_context,"../../Resources/Textures/lead_rusted_Base_Color.jpg",&uberMat2_img1));
-		g_gc.GCAdd(uberMat2_img1);
+	 	//CHECK(CreateAMDFloor(g_context, g_scene, g_matsys, g_gc, 0.20f, 0.20f, 0.0f, -1.0f, 0.0f));
+		//char pathImageFileA = "../../Resources/Textures/art.jpg";
+		CHECK(CreateAMDFloorIN(g_context, g_scene, g_matsys, g_gc, 0.20f, 0.20f, 0.0f, -1.0f, 0.0f, "../../Resources/Textures/amd.png"));
 
-		rpr_image uberMat2_img2 = nullptr;
-		CHECK(rprContextCreateImageFromFile(g_context,"../../Resources/Textures/lead_rusted_Normal.jpg",&uberMat2_img2));
-		g_gc.GCAdd(uberMat2_img2);
-	
-		rpr_material_node uberMat2_imgTexture1 = nullptr;
-		CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_IMAGE_TEXTURE,&uberMat2_imgTexture1));
-		g_gc.GCAdd(uberMat2_imgTexture1);
-		CHECK(rprMaterialNodeSetInputImageDataByKey(uberMat2_imgTexture1,   RPR_MATERIAL_INPUT_DATA  ,uberMat2_img1));
+		rpr_mesh_info mesh_properties[16];
+		mesh_properties[0] = (rpr_mesh_info)RPR_MESH_VOLUME_FLAG;
+		mesh_properties[1] = (rpr_mesh_info)1; // enable the Volume flag for the Mesh
+		mesh_properties[2] = (rpr_mesh_info)0;
 
-		rpr_material_node uberMat2_imgTexture2 = nullptr;
-		CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_IMAGE_TEXTURE,&uberMat2_imgTexture2));
-		g_gc.GCAdd(uberMat2_imgTexture2);
-		CHECK(rprMaterialNodeSetInputImageDataByKey(uberMat2_imgTexture2,   RPR_MATERIAL_INPUT_DATA  ,uberMat2_img2));
+		// Volume shapes don't need any vertices data: the bounds of volume will only be defined by the grid.
+		// Also, make sure to enable the RPR_MESH_VOLUME_FLAG
+		rpr_shape cube = 0;
+		CHECK(rprContextCreateMeshEx2(g_context,
+			nullptr, 0, 0,
+			nullptr, 0, 0,
+			nullptr, 0, 0, 0,
+			nullptr, nullptr, nullptr, nullptr, 0,
+			nullptr, 0, nullptr, nullptr, nullptr, 0,
+			mesh_properties,
+			&cube));
 
-		rpr_material_node matNormalMap = nullptr;
-		CHECK( rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_NORMAL_MAP,&matNormalMap));
-		g_gc.GCAdd(matNormalMap);
-		CHECK( rprMaterialNodeSetInputFByKey(matNormalMap,RPR_MATERIAL_INPUT_SCALE,1.0f,1.0f,1.0f,1.0f));
-		CHECK( rprMaterialNodeSetInputNByKey(matNormalMap,RPR_MATERIAL_INPUT_COLOR,uberMat2_imgTexture2));
+		// bounds of volume will always be a box defined by the rprShapeSetTransform
+		RadeonProRender::matrix cubeTransform1 = RadeonProRender::translation(RadeonProRender::float3(0, +0.0f, 0)) * RadeonProRender::rotation_y(0.0f) * RadeonProRender::scale(RadeonProRender::float3(1.0f, 1.0f, 1.0f));
+		CHECK(rprShapeSetTransform(cube, true, &cubeTransform1.m00));
+		CHECK(rprSceneAttachShape(g_scene, cube));
+		// 
+		// define the grids data used by the Volume material.
+		const size_t n = 128; //128;
+		std::vector<unsigned int> indicesList;
+		std::vector<float> gridVector1;
+		std::vector<float> gridVector2;
+		//const float radiusFadeoutStart = 130.0f;
+		//const float radiusFadeoutEnd   = 130.0f;
+		//for (unsigned int x = 0; x < n; x++)
+		//{
+		//	for (unsigned int y = 0; y < n; y++)
+		//	{
+		//		for (unsigned int z = 0; z < n; z++)
+		//		{
+		//			float radius = sqrtf(((float)x - (float)n / 2.0f) wwwwwwwwwwwwwwwww* ((float)x - (float)n / 2.0f) + ((float)z - (float)n / 2.0f) * ((float)z - (float)n / 2.0f));
+		//			//float radius = sqrtf(((float)x - (float)n / 2.0f) * ((float)x - (float)n / 2.0f) + ((float)y - (float)n / 2.0f) * ((float)y - (float)n / 2.0f) + ((float)z - (float)n / 2.0f) * ((float)z - (float)n / 2.0f));
+		//
+		//			if (radius < radiusFadeoutEnd)
+		//			{
+		//				indicesList.push_back(x);
+		//				indicesList.push_back(y);
+		//				indicesList.push_back(z);
+		//
+		//				// "gridVector1" is going to be a cylinder
+		//				if (radius <= radiusFadeoutStart)
+		//				{
+		//					gridVector1.push_back(1.0f);
+		//				}
+		//				else
+		//				{
+		//					gridVector1.push_back(1.0f - (radius - radiusFadeoutStart) / (radiusFadeoutEnd - radiusFadeoutStart));
+		//				}
+		//
+		//				// "gridVector2" will be a 0->1 ramp along Y-axis
+		//				gridVector2.push_back((float)y / (float)n);
+		//			}
+		//		}
+		//	}
+		//}
+		// 
+		//float atomposi[] = {
+		//	0.1f,0.1f,0.1f,
+		//	0.1f,0.1f,0.2f,
+		//	0.2f,0.1f,0.1f,
+		//	0.5f,0.5f,0.5f,
+		//	0.5f,0.5f,0.6f,
+		//	0.6f,0.5f,0.5f,
+		//};
+		//float atomposi[] = {
+		//	10.0f,10.0f,10.0f,
+		//	10.0f,10.0f,20.0f,
+		//	20.0f,10.0f,10.0f,
+		//	50.0f,50.0f,50.0f,
+		//	50.0f,50.0f,60.0f,
+		//	60.0f,50.0f,50.0f,
+		//};
+		//const int atomnum = sizeof(atomposi) / 3.0f;
+		//const float atomrad = 10.0f;
 
-		rpr_material_node uberMat2 = nullptr;
-		CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_UBERV2,&uberMat2));
-		g_gc.GCAdd(uberMat2);
+		////202309
+		//dim3 blockDim(8, 8, 8);  // Example block dimensions
+		//dim3 gridDim((n + blockDim.x - 1) / blockDim.x,
+		//	(n + blockDim.y - 1) / blockDim.y,
+		//	(n + blockDim.z - 1) / blockDim.z);
+		//
+		//processKernel << <gridDim, blockDim >> > (atomnum, n, d_atomposi, d_indicesList, d_gridVector1, d_gridVector2);
 
-		CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_COLOR   ,uberMat2_imgTexture1));
-		CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_NORMAL   ,matNormalMap));
-		CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_WEIGHT    ,1, 1, 1, 1));
+		for (unsigned int i = 0; i < atomnum; i++)
+		{
+			for (unsigned int x = 0; x < n; x++)
+			{
+				for (unsigned int y = 0; y < n; y++)
+				{
+					for (unsigned int z = 0; z < n; z++)
+					{
+						const int j = i * 3;
+						float radius = sqrtf(((float)x - (float)atomposi[j]) * ((float)x - (float)atomposi[j])
+									    	+ ((float)y - (float)atomposi[j+1]) * ((float)y - (float)atomposi[j+1])
+									    	+ ((float)z - (float)atomposi[j+2]) * ((float)z - (float)atomposi[j+2]));
+						if (radius < atomrad)
+						{
+							indicesList.push_back(x);
+							indicesList.push_back(y);
+							indicesList.push_back(z);
+		
+							//if (radius <= atomrad)
+							//{
+							//	gridVector1.push_back(1.0f);
+							//}
+							//else
+							//{
+							//	gridVector1.push_back(0.0f);
+							//}
+		
+							gridVector1.push_back(1.0f); 
+							gridVector2.push_back(1.0f);// (float)j / (float)atomnum);
+						}
+					}
+				}
+			}
+		}
 
-		CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_COLOR  ,uberMat2_imgTexture1));
-		CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_NORMAL   ,matNormalMap));
-		CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_WEIGHT  ,1, 1, 1, 1));
-		CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ROUGHNESS     ,0, 0, 0, 0));
-		CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ANISOTROPY    ,0, 0, 0, 0));
-		CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ANISOTROPY_ROTATION  ,0, 0, 0, 0));
-		CHECK(rprMaterialNodeSetInputUByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_MODE   ,RPR_UBER_MATERIAL_IOR_MODE_METALNESS));
-		CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_IOR   ,1.36, 1.36, 1.36, 1.36));
+		// this first grid defines a cylinder
+		rpr_grid rprgrid1 = 0;
+		CHECK(rprContextCreateGrid(g_context, &rprgrid1,
+			n, n, n,
+			&indicesList[0], indicesList.size() / 3, RPR_GRID_INDICES_TOPOLOGY_XYZ_U32,
+			&gridVector1[0], gridVector1.size() * sizeof(gridVector1[0]), 0
+		));
 
-		CHECK(rprShapeSetMaterial(teapot01, uberMat2));
+		// GRID_SAMPLER could be compared to a 3d-texture sampler. 
+		// input is a 3d grid,  output is the sampled value from grid
+		rpr_material_node gridSampler1 = NULL;
+		CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler1));
+		CHECK(rprMaterialNodeSetInputGridDataByKey(gridSampler1, RPR_MATERIAL_INPUT_DATA, rprgrid1));
+
+		// This second grid is a gradient along the Y axis.
+		rpr_grid rprgrid2 = 0;
+		CHECK(rprContextCreateGrid(g_context, &rprgrid2,
+			n, n, n,
+			&indicesList[0], indicesList.size() / 3, RPR_GRID_INDICES_TOPOLOGY_XYZ_U32,
+			&gridVector2[0], gridVector2.size() * sizeof(gridVector2[0]), 0
+		));
+
+		// create grid sample for grid2
+		rpr_material_node gridSampler2 = NULL;
+		CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler2));
+		CHECK(rprMaterialNodeSetInputGridDataByKey(gridSampler2, RPR_MATERIAL_INPUT_DATA, rprgrid2));
+
+		// create a gradient color texture, here 3 pixels : Red, Green, Blue.
+		// will be used as a lookup output 
+		float rampData2[] = {
+			1.f,0.f,0.f,
+			0.f,1.f,0.f,
+			0.f,0.f,1.f 
+		};
+		rpr_image rampimg2 = 0;
+		rpr_image_desc rampDesc2;
+		rampDesc2.image_width = sizeof(rampData2) / (3 * sizeof(float));
+		rampDesc2.image_height = 1;
+		rampDesc2.image_depth = 0;
+		rampDesc2.image_row_pitch = rampDesc2.image_width * sizeof(rpr_float) * 3;
+		rampDesc2.image_slice_pitch = 0;
+		CHECK(rprContextCreateImage(g_context, { 3, RPR_COMPONENT_TYPE_FLOAT32 }, & rampDesc2, rampData2, & rampimg2));
+
+		// this texture will be used for the color of the volume material.
+		// UV input is the 0->1 gradient created by the scalar grid "rprgrid2".
+		// Output is the red,green,blue texture.
+		// This demonstrates how we can create a lookup table from scalar grid to vector values.
+		rpr_material_node rampSampler2 = NULL;
+		CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_IMAGE_TEXTURE, &rampSampler2));
+		CHECK(rprMaterialNodeSetInputImageDataByKey(rampSampler2, RPR_MATERIAL_INPUT_DATA, rampimg2));
+		CHECK(rprMaterialNodeSetInputNByKey(rampSampler2, RPR_MATERIAL_INPUT_UV, gridSampler2));
+
+		// for ramp texture, it's better to clamp it to edges.
+		CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_U, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
+		CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_V, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
+
+		// create the Volume material
+		rpr_material_node materialVolume = NULL;
+		CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_VOLUME, &materialVolume));
+
+		// density is defined by the "cylinder" grid
+		CHECK(rprMaterialNodeSetInputNByKey(materialVolume, RPR_MATERIAL_INPUT_DENSITYGRID, gridSampler1));
+
+		// apply the volume material to the shape.
+		// Note that here we use   rprShapeSetVolumeMaterial  instead of the classic  rprShapeSetMaterial  call.
+		CHECK(rprShapeSetVolumeMaterial(cube, materialVolume));
+
+		// RPR_MATERIAL_INPUT_DENSITY is just a multiplier for DENSITYGRID
+		CHECK(rprMaterialNodeSetInputFByKey(materialVolume, RPR_MATERIAL_INPUT_DENSITY, 100.0f, 0.0f, 0.0f, 0.0f));
+
+		// define the color of the volume
+		CHECK(rprMaterialNodeSetInputNByKey(materialVolume, RPR_MATERIAL_INPUT_COLOR, rampSampler2));
+
+		// more iterations will increase the light penetration inside the volume.
+		CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_MAX_RECURSION, (rpr_uint)2)); // 5
+
+		// when using volumes, we usually need high number of iterations.
+		CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_ITERATIONS, 3000));
+
+		// set rendering gamma
+		CHECK(rprContextSetParameterByKey1f(g_context, RPR_CONTEXT_DISPLAY_GAMMA, 2.2f));
+
+
 	}
 
-	CHECK( rprContextSetParameterByKey1f(g_context, RPR_CONTEXT_DISPLAY_GAMMA , 2.2f ) ); // set display gamma
+
+	
+	
+
+
+
+
+
+
+
+
+
 
 	// Create framebuffer to store rendering result
 	rpr_framebuffer_desc desc = { WINDOW_WIDTH,WINDOW_HEIGHT };
@@ -631,10 +922,10 @@ int main(int argc, char** argv)
 	// This line can be added for faster RPR rendering.
 	// The higher RPR_CONTEXT_PREVIEW, the faster RPR rendering, ( but more pixelated ).
 	// 0 = disabled (defaut value)
-	//CHECK( rprContextSetParameterByKey1u(g_context,RPR_CONTEXT_PREVIEW, 1u ) );
+	CHECK( rprContextSetParameterByKey1u(g_context,RPR_CONTEXT_PREVIEW, 1u ) );
 
 	// Set framebuffer for the context
-	CHECK(rprContextSetAOV(g_context, RPR_AOV_COLOR, g_frame_buffer));
+	///CHECK(rprContextSetAOV(g_context, RPR_AOV_COLOR, g_frame_buffer));
 
 	// Define the update callback.
 	// During the rprContextRender execution, RPR will call it regularly

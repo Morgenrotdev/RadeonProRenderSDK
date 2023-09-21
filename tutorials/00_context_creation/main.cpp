@@ -43,7 +43,7 @@ int main()
 	std::cout << "RPR Context creation succeeded." << std::endl;
 
 	char deviceName_gpu0[1024]; deviceName_gpu0[0] = 0;
-	CHECK(  rprContextGetInfo(context,RPR_CONTEXT_GPU0_NAME, sizeof(deviceName_gpu0), deviceName_gpu0, 0) );
+	CHECK(  rprContextGetInfo(context,RPR_CONTEXT_GPU1_NAME, sizeof(deviceName_gpu0), deviceName_gpu0, 0) );
 
 	// Output the name of the GPU
 	std::cout << "GPU0 name : " << std::string(deviceName_gpu0) << std::endl;

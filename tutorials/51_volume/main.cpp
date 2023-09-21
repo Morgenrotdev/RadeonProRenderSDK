@@ -192,6 +192,12 @@ int main()
 	CHECK( rprMaterialNodeSetInputImageDataByKey(rampSampler2, RPR_MATERIAL_INPUT_DATA, rampimg2));
 	CHECK( rprMaterialNodeSetInputNByKey(rampSampler2, RPR_MATERIAL_INPUT_UV, gridSampler2));
 
+
+
+
+
+
+
 	// for ramp texture, it's better to clamp it to edges.
 	CHECK( rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_U, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
 	CHECK( rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_V, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
@@ -227,7 +233,7 @@ int main()
 
 	// resolve and save the rendering to an image file.
 	CHECK(rprContextResolveFrameBuffer(context,frame_buffer,frame_buffer_resolved,false));
-	CHECK(rprFrameBufferSaveToFile(frame_buffer_resolved,"51_00.png"));
+	CHECK(rprFrameBufferSaveToFile(frame_buffer_resolved,"..\51_volume\51_00.png"));
 
 
 	// Release the stuff we created
