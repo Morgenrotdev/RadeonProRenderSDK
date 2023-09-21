@@ -549,7 +549,8 @@ rpr_status CreateNatureEnvLight(rpr_context context, rpr_scene scene, RPRGarbage
 	CHECK(rprContextCreateEnvironmentLight(context, &lightEnv));
 	gc.GCAdd(lightEnv);
 
-	const std::string pathImageFile = "../../Resources/Textures/turning_area_4k.hdr";
+	//const std::string pathImageFile = "../../Resources/Textures/turning_area_4k.hdr";
+	const std::string pathImageFile = "../../Resources/Textures/flower.jpg";
 
 	rpr_image imgEnvLight = nullptr;
 	rpr_status status = rprContextCreateImageFromFile(context, pathImageFile.c_str(), &imgEnvLight); // import image use by the Env light

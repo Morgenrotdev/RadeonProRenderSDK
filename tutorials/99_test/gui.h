@@ -26,6 +26,7 @@
 #include <iostream>
 #include <thread>
 #include <memory>
+
 const unsigned int WINDOW_WIDTH = 640;
 const unsigned int WINDOW_HEIGHT = 480;
 //
