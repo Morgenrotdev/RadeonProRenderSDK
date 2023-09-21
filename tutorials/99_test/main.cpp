@@ -1,26 +1,63 @@
+#ifdef __APPLE__
+#include "GL/glew.h"
+#elif WIN32
+#define NOMINMAX
+#include <Windows.h>
+#include "GL/glew.h"
+#include "GLUT/GLUT.h"
+#endif
+
 #include "RadeonProRender.h"
+#include "RadeonProRender_GL.h"
 #include "Math/mathutils.h"
 #include "../common/common.h"
+#include "../32_gl_interop/ShaderManager.h"
+
+
+#ifdef __APPLE__
+#ifndef GL_RGBA32F
+#define GL_RGBA32F GL_RGBA32F_ARB
+#endif 
+#endif
+
 #include <cassert>
 #include <iostream>
-
+#include <thread>
+#include <memory>
+#include "gui.h"
 //
 // This demo demonstrates Volumes with RPR
 //
 
-RPRGarbageCollector g_gc;
+//RPRGarbageCollector g_gc;
 
-int main()
+int main(int argc, char** argv)
 {
 	//	for Debugging you can enable Radeon ProRender API trace
 	//	set this before any RPR API calls
-	rprContextSetParameterByKey1u(0, RPR_CONTEXT_TRACING_ENABLED, 1);
+	//rprContextSetParameterByKey1u(0, RPR_CONTEXT_TRACING_ENABLED, 1);
 
+		//GL setup
+	{
+		// Initialize GLUT and GLEW libraries
+		glutInit(&argc, (char**)argv);
+		glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+		glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
+		glutCreateWindow("gl_interop");
+		GLenum err = glewInit();
+		if (err != GLEW_OK)
+		{
+			std::cout << "GLEW initialization failed\n";
+			return -1;
+		}
 
+		// Set OpenGL states
+		InitGraphics();
+	}
 	// the RPR context object.
-	rpr_context context = nullptr;
+	//rpr_context context = nullptr;
 
-	// Register the RPR DLL
+	// Register the RPR DLL  //Reguster the plugin
 	rpr_int tahoePluginID = rprRegisterPlugin(RPR_PLUGIN_FILE_NAME);
 	CHECK_NE(tahoePluginID, -1);
 	rpr_int plugins[] = { tahoePluginID };
@@ -28,53 +65,71 @@ int main()
 
 	// Create context using a single GPU 
 	// note that multiple GPUs can be enabled for example with creation_flags = RPR_CREATION_FLAGS_ENABLE_GPU0 | RPR_CREATION_FLAGS_ENABLE_GPU1
-	CHECK(rprCreateContext(RPR_API_VERSION, plugins, pluginCount, g_ContextCreationFlags, g_contextProperties, NULL, &context));
+	CHECK(rprCreateContext(RPR_API_VERSION, plugins, pluginCount, g_ContextCreationFlags, g_contextProperties, NULL, &g_context));
 
 	// Set the active plugin.
-	CHECK(rprContextSetActivePlugin(context, plugins[0]));
+	CHECK(rprContextSetActivePlugin(g_context, plugins[0]));
 
 	std::cout << "RPR Context creation succeeded." << std::endl;
 
 
 	char deviceName_gpu0[1024]; deviceName_gpu0[0] = 0;
-	CHECK(rprContextGetInfo(context, RPR_CONTEXT_GPU1_NAME, sizeof(deviceName_gpu0), deviceName_gpu0, 0));
+	CHECK(rprContextGetInfo(g_context, RPR_CONTEXT_GPU1_NAME, sizeof(deviceName_gpu0), deviceName_gpu0, 0));
 
 	// Output the name of the GPU
 	std::cout << "GPU0 name : " << std::string(deviceName_gpu0) << std::endl;
 
 	// Release the stuff we created
 	// Create material system
-	rpr_material_system matsys = 0;
-	CHECK(rprContextCreateMaterialSystem(context, 0, &matsys));
+	//rpr_material_system matsys = 0;
+	CHECK(rprContextCreateMaterialSystem(g_context, 0, &g_matsys));
 
 	// Create a scene
-	rpr_scene scene = nullptr;
-	CHECK(rprContextCreateScene(context, &scene)); // create the scene
-	CHECK(rprContextSetScene(context, scene)); // set this scene as the "active" scene used for rendering.
-
+	//rpr_scene scene = nullptr;
+	CHECK(rprContextCreateScene(g_context, &g_scene)); // create the scene
+	//CHECK(rprContextSetScene(context, scene)); // set this scene as the "active" scene used for rendering.
+	// Create an environment light
+	CHECK(CreateNatureEnvLight(g_context, g_scene, g_gc, 0.9f));
 
 	// Create the camera
-	rpr_camera camera = nullptr;
+	//rpr_camera camera = nullptr;
 	{
-		CHECK(rprContextCreateCamera(context, &camera));
-		CHECK(rprCameraLookAt(camera, 2.5f, 1.5f, 3.5f, 0.0f, 0.1f, 0.0f, 0, 1, 0));
-		CHECK(rprSceneSetCamera(scene, camera));
-	}
+		CHECK(rprContextCreateCamera(g_context, &g_camera));
+		//CHECK(rprCameraLookAt(camera, 2.5f, 1.5f, 3.5f, 0.0f, 0.1f, 0.0f, 0, 1, 0));
+		//CHECK(rprSceneSetCamera(scene, camera));
+				// Position camera in world space: 
+		CHECK(rprCameraLookAt(g_camera, 0.0f, 5.0f, 20.0f, 0, 1, 0, 0, 1, 0));
 
-	CHECK(CreateAMDFloor(context, scene, matsys, g_gc, 0.20f, 0.20f, 0.0f, -1.0f, 0.0f));
+		// set camera field of view
+		CHECK(rprCameraSetFocalLength(g_camera, 75.f));
+
+		// Set camera for the scene
+		CHECK(rprSceneSetCamera(g_scene, g_camera));
+	}
+	// Set scene to render for the context
+	CHECK(rprContextSetScene(g_context, g_scene));
+
+
+
+	// create the floor
+	CHECK(CreateAMDFloor(g_context, g_scene, g_matsys, g_gc, 0.20f, 0.20f, 0.0f, -1.0f, 0.0f));
 
 	// Create an environment light
-	CHECK(CreateNatureEnvLight(context, scene, g_gc, 0.8f));
+	//CHECK(CreateNatureEnvLight(context, scene, g_gc, 0.8f));
 
 
-	// Create framebuffer 
-	rpr_framebuffer_desc desc = { 640 , 480 }; // resolution in pixels
-	rpr_framebuffer_format fmt = { 4, RPR_COMPONENT_TYPE_FLOAT32 }; // format: 4 component 32-bit float value each
-	rpr_framebuffer frame_buffer = nullptr;
-	rpr_framebuffer frame_buffer_resolved = nullptr;
-	CHECK(rprContextCreateFrameBuffer(context, fmt, &desc, &frame_buffer));
-	CHECK(rprContextCreateFrameBuffer(context, fmt, &desc, &frame_buffer_resolved));
-	CHECK(rprContextSetAOV(context, RPR_AOV_COLOR, frame_buffer)); // attach 'frame_buffer' to the Color AOV ( this is the main AOV for final rendering )
+	//// Create framebuffer 
+	//rpr_framebuffer_desc desc = { WINDOW_WIDTH,WINDOW_HEIGHT }; // resolution in pixels
+	//rpr_framebuffer_format fmt = { 4, RPR_COMPONENT_TYPE_FLOAT32 }; // format: 4 component 32-bit float value each
+	////rpr_framebuffer frame_buffer = nullptr;
+	////rpr_framebuffer frame_buffer_resolved = nullptr
+
+	//// 4 component 32-bit float value each
+	////rpr_framebuffer_format fmt = { 4, RPR_`COMPONENT_TYPE_FLOAT32 }; // format: 4 component 32-bit float value each
+	//CHECK(rprContextCreateFrameBuffer(g_context, fmt, &desc, &g_frame_buffer));
+	//CHECK(rprContextCreateFrameBuffer(g_context, fmt, &desc, &g_frame_buffer_2));
+	//// Set framebuffer for the context
+	//CHECK(rprContextSetAOV(g_context, RPR_AOV_COLOR, g_frame_buffer)); // attach 'frame_buffer' to the Color AOV ( this is the main AOV for final rendering )
 
 
 	rpr_mesh_info mesh_properties[16];
@@ -85,7 +140,7 @@ int main()
 	// Volume shapes don't need any vertices data: the bounds of volume will only be defined by the grid.
 	// Also, make sure to enable the RPR_MESH_VOLUME_FLAG
 	rpr_shape cube = 0;
-	CHECK(rprContextCreateMeshEx2(context,
+	CHECK(rprContextCreateMeshEx2(g_context,
 		nullptr, 0, 0,
 		nullptr, 0, 0,
 		nullptr, 0, 0, 0,
@@ -97,7 +152,7 @@ int main()
 	// bounds of volume will always be a box defined by the rprShapeSetTransform
 	RadeonProRender::matrix cubeTransform1 = RadeonProRender::translation(RadeonProRender::float3(0, +0.0f, 0)) * RadeonProRender::rotation_y(0.0f) * RadeonProRender::scale(RadeonProRender::float3(1.0f, 2.0f, 1.0f));
 	CHECK(rprShapeSetTransform(cube, true, &cubeTransform1.m00));
-	CHECK(rprSceneAttachShape(scene, cube));
+	CHECK(rprSceneAttachShape(g_scene, cube));
 
 
 	// define the grids data used by the Volume material.
@@ -139,7 +194,7 @@ int main()
 
 	// this first grid defines a cylinder
 	rpr_grid rprgrid1 = 0;
-	CHECK(rprContextCreateGrid(context, &rprgrid1,
+	CHECK(rprContextCreateGrid(g_context, &rprgrid1,
 		n, n, n,
 		&indicesList[0], indicesList.size() / 3, RPR_GRID_INDICES_TOPOLOGY_XYZ_U32,
 		&gridVector1[0], gridVector1.size() * sizeof(gridVector1[0]), 0
@@ -148,12 +203,12 @@ int main()
 	// GRID_SAMPLER could be compared to a 3d-texture sampler. 
 	// input is a 3d grid,  output is the sampled value from grid
 	rpr_material_node gridSampler1 = NULL;
-	CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler1));
+	CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler1));
 	CHECK(rprMaterialNodeSetInputGridDataByKey(gridSampler1, RPR_MATERIAL_INPUT_DATA, rprgrid1));
 
 	// This second grid is a gradient along the Y axis.
 	rpr_grid rprgrid2 = 0;
-	CHECK(rprContextCreateGrid(context, &rprgrid2,
+	CHECK(rprContextCreateGrid(g_context, &rprgrid2,
 		n, n, n,
 		&indicesList[0], indicesList.size() / 3, RPR_GRID_INDICES_TOPOLOGY_XYZ_U32,
 		&gridVector2[0], gridVector2.size() * sizeof(gridVector2[0]), 0
@@ -161,7 +216,7 @@ int main()
 
 	// create grid sample for grid2
 	rpr_material_node gridSampler2 = NULL;
-	CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler2));
+	CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler2));
 	CHECK(rprMaterialNodeSetInputGridDataByKey(gridSampler2, RPR_MATERIAL_INPUT_DATA, rprgrid2));
 
 	// create a gradient color texture, here 3 pixels : Red, Green, Blue.
@@ -177,14 +232,14 @@ int main()
 	rampDesc2.image_depth = 0;
 	rampDesc2.image_row_pitch = rampDesc2.image_width * sizeof(rpr_float) * 3;
 	rampDesc2.image_slice_pitch = 0;
-	CHECK(rprContextCreateImage(context, { 3, RPR_COMPONENT_TYPE_FLOAT32 }, &rampDesc2, rampData2, &rampimg2));
+	CHECK(rprContextCreateImage(g_context, { 3, RPR_COMPONENT_TYPE_FLOAT32 }, &rampDesc2, rampData2, &rampimg2));
 
 	// this texture will be used for the color of the volume material.
 	// UV input is the 0->1 gradient created by the scalar grid "rprgrid2".
 	// Output is the red,green,blue texture.
 	// This demonstrates how we can create a lookup table from scalar grid to vector values.
 	rpr_material_node rampSampler2 = NULL;
-	CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_IMAGE_TEXTURE, &rampSampler2));
+	CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_IMAGE_TEXTURE, &rampSampler2));
 	CHECK(rprMaterialNodeSetInputImageDataByKey(rampSampler2, RPR_MATERIAL_INPUT_DATA, rampimg2));
 	CHECK(rprMaterialNodeSetInputNByKey(rampSampler2, RPR_MATERIAL_INPUT_UV, gridSampler2));
 
@@ -194,7 +249,7 @@ int main()
 
 	// create the Volume material
 	rpr_material_node materialVolume = NULL;
-	CHECK(rprMaterialSystemCreateNode(matsys, RPR_MATERIAL_NODE_VOLUME, &materialVolume));
+	CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_VOLUME, &materialVolume));
 
 	// density is defined by the "cylinder" grid
 	CHECK(rprMaterialNodeSetInputNByKey(materialVolume, RPR_MATERIAL_INPUT_DENSITYGRID, gridSampler1));
@@ -210,20 +265,72 @@ int main()
 	CHECK(rprMaterialNodeSetInputNByKey(materialVolume, RPR_MATERIAL_INPUT_COLOR, rampSampler2));
 
 	// more iterations will increase the light penetration inside the volume.
-	CHECK(rprContextSetParameterByKey1u(context, RPR_CONTEXT_MAX_RECURSION, (rpr_uint)5)); // 5
+	CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_MAX_RECURSION, (rpr_uint)5)); // 5
 
 	// when using volumes, we usually need high number of iterations.
-	CHECK(rprContextSetParameterByKey1u(context, RPR_CONTEXT_ITERATIONS, 3000));
+	CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_ITERATIONS, 3000));
 
 	// set rendering gamma
-	CHECK(rprContextSetParameterByKey1f(context, RPR_CONTEXT_DISPLAY_GAMMA, 2.2f));
+	CHECK(rprContextSetParameterByKey1f(g_context, RPR_CONTEXT_DISPLAY_GAMMA, 2.2f));
+
+
+
+
+
+	// Create framebuffer 
+	rpr_framebuffer_desc desc = { WINDOW_WIDTH,WINDOW_HEIGHT }; // resolution in pixels
+	rpr_framebuffer_format fmt = { 4, RPR_COMPONENT_TYPE_FLOAT32 }; // format: 4 component 32-bit float value each
+	//rpr_framebuffer frame_buffer = nullptr;
+	//rpr_framebuffer frame_buffer_resolved = nullptr
+
+	// 4 component 32-bit float value each
+	//rpr_framebuffer_format fmt = { 4, RPR_`COMPONENT_TYPE_FLOAT32 }; // format: 4 component 32-bit float value each
+	CHECK(rprContextCreateFrameBuffer(g_context, fmt, &desc, &g_frame_buffer));
+	CHECK(rprContextCreateFrameBuffer(g_context, fmt, &desc, &g_frame_buffer_2));
+	// Set framebuffer for the context
+	CHECK(rprContextSetAOV(g_context, RPR_AOV_COLOR, g_frame_buffer)); // attach 'frame_buffer' to the Color AOV ( this is the main AOV for final rendering )
+
+
+	// Define the update callback.
+	// During the rprContextRender execution, RPR will call it regularly
+	// The 'CALLBACK_DATA' : 'g_update' is not used by RPR. it can be any data structure that the API user wants.
+	CHECK(rprContextSetParameterByKeyPtr(g_context, RPR_CONTEXT_RENDER_UPDATE_CALLBACK_FUNC, (void*)GuiRenderImpl::notifyUpdate));
+	CHECK(rprContextSetParameterByKeyPtr(g_context, RPR_CONTEXT_RENDER_UPDATE_CALLBACK_DATA, &g_update));
+
 
 	// Start the rendering. 
-	CHECK(rprContextRender(context));
+	//CHECK(rprContextRender(g_context));
+	// do a first rendering iteration, just for to force scene/cache building.
+	std::cout << "Cache and scene building... ";
+	CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_ITERATIONS, 1));
+	CHECK(rprContextRender(g_context));
+	std::cout << "done\n";
+
+
+	// each rprContextRender call will do `g_batchSize` iterations. 
+	// Note that calling rprContextRender 1 time with RPR_CONTEXT_ITERATIONS = `g_batchSize` is faster than calling rprContextRender `g_batchSize` times with RPR_CONTEXT_ITERATIONS = 1
+	CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_ITERATIONS, g_batchSize));
+
+	// allocate the data that will be used the read RPR framebuffer, and give it to OpenGL.
+	g_fbdata = std::shared_ptr<float>(new float[WINDOW_WIDTH * WINDOW_HEIGHT * 4], std::default_delete<float[]>());
+
+	std::cout << "Press W or S to move the camera.\n";
+
+	glutDisplayFunc(Display);
+	glutIdleFunc(Update);
+	glutKeyboardFunc(OnKeyboardEvent);
+	glutMouseFunc(OnMouseEvent);
+	glutMotionFunc(OnMouseMoveEvent);
+	glutMainLoop();
+
+
+	// this should be called when the OpenGL Application closes
+	// ( note that it may not be called, as GLUT doesn't have "Exit" callback - press X key in order to have a cleaned exit )
+	OnExit();
 
 	// resolve and save the rendering to an image file.
-	CHECK(rprContextResolveFrameBuffer(context, frame_buffer, frame_buffer_resolved, false));
-	CHECK(rprFrameBufferSaveToFile(frame_buffer_resolved, "../../51_00.png"));
+	//CHECK(rprContextResolveFrameBuffer(g_context, g_frame_buffer, g_frame_buffer_2, false));
+	//CHECK(rprFrameBufferSaveToFile(frame_buffer_resolved, "../../51_00.png"));
 
 
 	// Release the stuff we created
@@ -235,14 +342,14 @@ int main()
 	CHECK(rprObjectDelete(materialVolume)); materialVolume = nullptr;
 	CHECK(rprObjectDelete(rampimg2)); rampimg2 = nullptr;
 	CHECK(rprObjectDelete(rampSampler2)); rampSampler2 = nullptr;
-	CHECK(rprObjectDelete(camera)); camera = nullptr;
-	CHECK(rprObjectDelete(frame_buffer)); frame_buffer = nullptr;
-	CHECK(rprObjectDelete(frame_buffer_resolved)); frame_buffer_resolved = nullptr;
+	CHECK(rprObjectDelete(g_camera)); g_camera = nullptr;
+	CHECK(rprObjectDelete(g_frame_buffer)); g_frame_buffer = nullptr;
+	CHECK(rprObjectDelete(g_frame_buffer_2)); g_frame_buffer_2 = nullptr;
 	g_gc.GCClean();
-	CHECK(rprObjectDelete(scene)); scene = nullptr;
-	CHECK(rprObjectDelete(matsys)); matsys = nullptr;
-	CheckNoLeak(context);
-	CHECK(rprObjectDelete(context)); context = nullptr;
+	CHECK(rprObjectDelete(g_scene)); g_scene = nullptr;
+	CHECK(rprObjectDelete(g_matsys)); g_matsys = nullptr;
+	CheckNoLeak(g_context);
+	CHECK(rprObjectDelete(g_context)); g_context = nullptr;
 	return 0;
 
 }
