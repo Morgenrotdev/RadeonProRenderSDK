@@ -112,7 +112,7 @@ int main(int argc, char** argv)
 
 
 	// create the floor
-	CHECK(CreateAMDFloor(g_context, g_scene, g_matsys, g_gc, 0.20f, 0.20f, 0.0f, -1.0f, 0.0f));
+	//CHECK(CreateAMDFloor(g_context, g_scene, g_matsys, g_gc, 0.20f, 0.20f, 0.0f, -1.0f, 0.0f));
 
 	// Create an environment light
 	//CHECK(CreateNatureEnvLight(context, scene, g_gc, 0.8f));
