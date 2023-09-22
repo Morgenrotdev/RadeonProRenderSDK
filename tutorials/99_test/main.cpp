@@ -766,7 +766,7 @@ int main(int argc, char** argv)
 				indicesList.push_back(z);
 				//gridVector1.push_back(1.0);
 				gridVector2.push_back(velocities[x + y * xmax + z * xmax * ymax]/ maxvelnome);
-				gridVector1.push_back(velocities[x + y * xmax + z * xmax * ymax] / maxvelnome);
+				gridVector1.push_back(maxvelnome / maxvelnome);
 				//gridVector2.push_back(bcd[j]/4.0);
 				//j++;
 			}
