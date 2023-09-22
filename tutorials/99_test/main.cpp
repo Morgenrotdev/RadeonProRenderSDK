@@ -30,8 +30,8 @@
 #include <vector>
 #include "gui.h"
 
-
-#define shimojima
+#define shimojima2
+//#define shimojima
 //#define original
 //#define original_test
 //
@@ -109,7 +109,7 @@ int main(int argc, char** argv)
 		//CHECK(rprSceneSetCamera(scene, camera));
 				// Position camera in world space: 
 		//CHECK(rprCameraLookAt(g_camera, 0.0f, 5.0f, 20.0f, 0, 1, 0, 0, 1, 0));
-		CHECK(rprCameraLookAt(g_camera, 0.0f, 5.0f, 5.0f, 0, 1, 0, 0, 1, 0));
+		CHECK(rprCameraLookAt(g_camera, 0.0f, 5.0f, 5.0f, 0, 0, 1, 0, 0, 1));
 
 		// set camera field of view
 		CHECK(rprCameraSetFocalLength(g_camera, 10.f));
@@ -688,6 +688,181 @@ int main(int argc, char** argv)
 
 #endif //shimojima
 
+#ifdef shimojima2
+
+	rpr_mesh_info mesh_properties[16];
+	mesh_properties[0] = (rpr_mesh_info)RPR_MESH_VOLUME_FLAG;
+	mesh_properties[1] = (rpr_mesh_info)1; // enable the Volume flag for the Mesh
+	mesh_properties[2] = (rpr_mesh_info)0;
+
+	// Volume shapes don't need any vertices data: the bounds of volume will only be defined by the grid.
+	// Also, make sure to enable the RPR_MESH_VOLUME_FLAG
+	rpr_shape cube = 0;
+	CHECK(rprContextCreateMeshEx2(g_context,
+		nullptr, 0, 0,
+		nullptr, 0, 0,
+		nullptr, 0, 0, 0,
+		nullptr, nullptr, nullptr, nullptr, 0,
+		nullptr, 0, nullptr, nullptr, nullptr, 0,
+		mesh_properties,
+		&cube));
+
+	// bounds of volume will always be a box defined by the rprShapeSetTransform
+	RadeonProRender::matrix cubeTransform1 = RadeonProRender::translation(RadeonProRender::float3(0, +0.0f, 0)) * RadeonProRender::rotation_y(0.0f) * RadeonProRender::scale(RadeonProRender::float3(1.0f, 1.0f, 0.1f));
+	CHECK(rprShapeSetTransform(cube, true, &cubeTransform1.m00));
+	CHECK(rprSceneAttachShape(g_scene, cube));
+
+
+	// define the grids data used by the Volume material.
+	//const size_t n = 128;
+	std::vector<unsigned int> indicesList;
+	std::vector<float> gridVector1;
+	std::vector<float> gridVector2;
+
+	const char* filename = "../99_test/all-fielda_40000.vtk";
+	std::ifstream file(filename);
+	std::vector<float> velocities;
+	std::vector<float> densities;
+	std::vector<float> pressures;
+	float velnome;
+
+		if (!file.is_open()) {
+			std::cerr << "Failed to open file: " << filename << std::endl;
+			return false;
+		}
+
+		std::string line;
+		bool readingVelocity = false;
+		bool readingDensity = false;
+		bool readingPressure = false;
+		bool readingGridnum = false;
+
+		while (std::getline(file, line)) {
+				float vx, vy, vz;
+				std::istringstream iss(line);
+				iss >> vx >> vy >> vz;
+				velnome = sqrt(vx * vx + vy * vy + vz * vz);
+				//std::cout << "velnome, vx, vy, vz = " << velnome <<" " << vx << " " << vy << " " << vz << " " << std::endl;
+				velocities.push_back(velnome);
+				//velocities.push_back(vy);
+				//velocities.push_back(vz);
+}
+		//exit(0);
+		unsigned int zmax = 1;
+		unsigned int ymax = 151;
+		unsigned int xmax = 151;
+		float maxvelnome = *max_element(velocities.begin(), velocities.end());
+		std::cout << "maxvelnome= " << maxvelnome << std::endl;
+	
+	//int j = 0;
+	for (unsigned int z = 0; z < zmax; z++)
+	{
+		for (unsigned int y = 0; y < ymax; y++)
+		{
+			for (unsigned int x = 0; x < xmax; x++)
+			{
+				indicesList.push_back(x);
+				indicesList.push_back(y);
+				indicesList.push_back(z);
+				//gridVector1.push_back(1.0);
+				gridVector2.push_back(velocities[x + y * xmax + z * xmax * ymax]/ maxvelnome);
+				gridVector1.push_back(velocities[x + y * xmax + z * xmax * ymax] / maxvelnome);
+				//gridVector2.push_back(bcd[j]/4.0);
+				//j++;
+			}
+		}
+	}
+	//float max = *max_element(gridVector1.begin(), gridVector1.end());
+
+	//for (int i = 0; i < idomein; i++) {
+	//	gridVector1[i] = gridVector1[i] / max;
+	//	gridVector2[i] = gridVector2[i] / max;
+	//}
+	// this first grid defines a cylinder
+	rpr_grid rprgrid1 = 0;
+	CHECK(rprContextCreateGrid(g_context, &rprgrid1,
+		size_t(xmax), size_t(ymax), size_t(zmax),
+		&indicesList[0], indicesList.size() / 3, RPR_GRID_INDICES_TOPOLOGY_XYZ_U32,
+		&gridVector1[0], gridVector1.size() * sizeof(gridVector1[0]), 0
+	));
+
+	// GRID_SAMPLER could be compared to a 3d-texture sampler. 
+	// input is a 3d grid,  output is the sampled value from grid
+	rpr_material_node gridSampler1 = NULL;
+	CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler1));
+	CHECK(rprMaterialNodeSetInputGridDataByKey(gridSampler1, RPR_MATERIAL_INPUT_DATA, rprgrid1));
+
+	// This second grid is a gradient along the Y axis.
+	rpr_grid rprgrid2 = 0;
+	CHECK(rprContextCreateGrid(g_context, &rprgrid2,
+		xmax, ymax, zmax,
+		&indicesList[0], indicesList.size() / 3, RPR_GRID_INDICES_TOPOLOGY_XYZ_U32,
+		&gridVector2[0], gridVector2.size() * sizeof(gridVector2[0]), 0
+	));
+
+	// create grid sample for grid2
+	rpr_material_node gridSampler2 = NULL;
+	CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler2));
+	CHECK(rprMaterialNodeSetInputGridDataByKey(gridSampler2, RPR_MATERIAL_INPUT_DATA, rprgrid2));
+
+	// create a gradient color texture, here 3 pixels : Red, Green, Blue.
+	// will be used as a lookup output 
+	float rampData2[] = {
+		1.f,0.f,0.f,
+		0.f,1.f,0.f,
+		0.f,0.f,1.f };
+	rpr_image rampimg2 = 0;
+	rpr_image_desc rampDesc2;
+	rampDesc2.image_width = sizeof(rampData2) / (3 * sizeof(float));
+	rampDesc2.image_height = 1;
+	rampDesc2.image_depth = 0;
+	rampDesc2.image_row_pitch = rampDesc2.image_width * sizeof(rpr_float) * 3;
+	rampDesc2.image_slice_pitch = 0;
+	CHECK(rprContextCreateImage(g_context, { 3, RPR_COMPONENT_TYPE_FLOAT32 }, &rampDesc2, rampData2, &rampimg2));
+
+	// this texture will be used for the color of the volume material.
+	// UV input is the 0->1 gradient created by the scalar grid "rprgrid2".
+	// Output is the red,green,blue texture.
+	// This demonstrates how we can create a lookup table from scalar grid to vector values.
+
+	// define color using gridSampler2
+	rpr_material_node rampSampler2 = NULL;
+	CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_IMAGE_TEXTURE, &rampSampler2));
+	CHECK(rprMaterialNodeSetInputImageDataByKey(rampSampler2, RPR_MATERIAL_INPUT_DATA, rampimg2));
+	CHECK(rprMaterialNodeSetInputNByKey(rampSampler2, RPR_MATERIAL_INPUT_UV, gridSampler2));
+
+	// for ramp texture, it's better to clamp it to edges.
+	CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_U, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
+	CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_V, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
+
+	// create the Volume material
+	rpr_material_node materialVolume = NULL;
+	CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_VOLUME, &materialVolume));
+
+	// density is defined by the "cylinder" grid
+	CHECK(rprMaterialNodeSetInputNByKey(materialVolume, RPR_MATERIAL_INPUT_DENSITYGRID, gridSampler1));
+
+	// apply the volume material to the shape.
+	// Note that here we use   rprShapeSetVolumeMaterial  instead of the classic  rprShapeSetMaterial  call.
+	CHECK(rprShapeSetVolumeMaterial(cube, materialVolume));
+
+	// RPR_MATERIAL_INPUT_DENSITY is just a multiplier for DENSITYGRID
+	CHECK(rprMaterialNodeSetInputFByKey(materialVolume, RPR_MATERIAL_INPUT_DENSITY, 100.0f, 0.0f, 0.0f, 1.0f));
+
+	// define the color of the volume
+	CHECK(rprMaterialNodeSetInputNByKey(materialVolume, RPR_MATERIAL_INPUT_COLOR, rampSampler2));
+
+	// more iterations will increase the light penetration inside the volume.
+	//CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_MAX_RECURSION, (rpr_uint)5)); // 5
+
+	// when using volumes, we usually need high number of iterations.
+	CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_ITERATIONS, 3000));
+
+	// set rendering gamma
+	CHECK(rprContextSetParameterByKey1f(g_context, RPR_CONTEXT_DISPLAY_GAMMA, 2.2f));
+
+
+#endif //shimojima2
 	// Create framebuffer 
 	rpr_framebuffer_desc desc = { WINDOW_WIDTH,WINDOW_HEIGHT }; // resolution in pixels
 	rpr_framebuffer_format fmt = { 4, RPR_COMPONENT_TYPE_FLOAT32 }; // format: 4 component 32-bit float value each
