@@ -1,0 +1,1431 @@
+/*****************************************************************************\
+*
+*  Module Name    gl_interop.cpp
+*  Project        Radeon ProRender SDK rendering tutorial
+*
+*  Description    Radeon ProRender SDK tutorials 
+*                 Demo of an OpenGL window rendering RPR.
+*
+*  Copyright(C) 2011-2021 Advanced Micro Devices, Inc. All rights reserved.
+*
+\*****************************************************************************/
+
+
+
+//
+// Demo covering an RPR rendering inside an OpenGL app.
+// rotate camera with mouse left-click + move
+// move camera with W/A/S/D keys
+// press X key to exit
+//
+
+
+#ifdef __APPLE__
+#include "GL/glew.h"
+#elif WIN32
+#define NOMINMAX
+#include <Windows.h>
+#include "GL/glew.h"
+#include "GLUT/GLUT.h"
+#endif
+
+#include "RadeonProRender.h"
+#include "RadeonProRender_GL.h"
+#include "Math/mathutils.h"
+#include "../common/common.h"
+#include "ShaderManager.h"
+#include "RprLoadStore.h"//For Export //202310
+
+#include "../common/picojson.h" //202310
+#define TINYOBJLOADER_IMPLEMENTATION //202310
+#include "../common/tiny_obj_loader.h" //202310
+
+
+#ifdef __APPLE__
+	#ifndef GL_RGBA32F
+	#define GL_RGBA32F GL_RGBA32F_ARB
+	#endif 
+#endif
+
+#include <cassert>
+#include <iostream>
+#include <thread>
+#include <memory>
+#include <map> //202310
+
+//#include <cuda_runtime.h>
+//#include <device_launch_parameters.h>
+
+//const unsigned int WINDOW_WIDTH = 640;
+//const unsigned int WINDOW_HEIGHT = 480;
+const unsigned int WINDOW_WIDTH  = 80*10;
+const unsigned int WINDOW_HEIGHT = 60*10;
+
+void Display();
+void OnExit();
+
+class GuiRenderImpl
+{
+public:
+	struct Update
+	{
+		Update()
+		{
+			clear();
+			m_progress = 0.0f;
+		}
+
+		volatile int m_hasUpdate;
+		volatile int m_done;
+		volatile int m_aborted;
+		int m_camUpdated;
+		float m_progress;
+		
+		void clear()
+		{
+			m_hasUpdate = m_done = m_aborted = m_camUpdated = 0;
+		}
+	};
+	static
+	void notifyUpdate( float x, void* userData )
+	{
+		Update* demo = (Update*)userData;
+		demo->m_hasUpdate = 1;
+		demo->m_progress = x;
+	}
+};
+
+
+GLuint              g_vertex_buffer_id = 0;
+GLuint              g_index_buffer_id = 0;
+GLuint              g_texture = 0;
+rpr_framebuffer		g_frame_buffer = NULL;
+rpr_context         g_context = NULL;
+rpr_material_system g_matsys = NULL;
+rpr_framebuffer     g_frame_buffer_2 = NULL;
+ShaderManager       g_shader_manager;
+rpr_scene			g_scene=nullptr;
+rpr_camera			g_camera=nullptr;
+std::shared_ptr<float>	g_fbdata = nullptr;
+RPRGarbageCollector g_gc;
+bool                g_askExit = false; // push X key to exit
+
+
+
+GuiRenderImpl::Update g_update;
+const auto g_invalidTime = std::chrono::time_point<std::chrono::high_resolution_clock>::max();
+int					g_benchmark_numberOfRenderIteration = 0;
+auto g_benchmark_start = g_invalidTime;
+
+//202309
+const size_t n = 128;
+float atomposi[] = {
+	20.0f,30.0f,60.0f,
+	20.0f,40.0f,70.0f,
+	40.0f,30.0f,60.0f,
+	50.0f,70.0f,80.0f,
+	50.0f,80.0f,90.0f,
+	70.0f,70.0f,80.0f,
+};
+const int atomnum = sizeof(atomposi) / 3.0f;
+const float atomrad = 20.0f;
+
+
+std::vector<std::tuple<float, float, float>> sphere_positions = {
+	{1.0f,1.0f,1.0f},
+	{2.0f,2.0f,2.0f},
+	{5.0f,5.0f,5.0f}
+};
+
+
+struct MOUSE_DRAG_INFO
+{
+	MOUSE_DRAG_INFO()
+	{
+		leftMouseButtonDown = false;
+		mousePosAtMouseButtonDown_X = -1;
+		mousePosAtMouseButtonDown_Y = -1;
+	}
+
+	RadeonProRender::float3 lookat;
+	RadeonProRender::float3 up;
+	RadeonProRender::float3 pos;
+	RadeonProRender::matrix mat;
+
+	int	mousePosAtMouseButtonDown_X;
+	int	mousePosAtMouseButtonDown_Y;
+
+	bool leftMouseButtonDown;
+};
+MOUSE_DRAG_INFO g_mouse_camera;
+
+
+
+// High batch size will increase the RPR performance ( rendering iteration per second ), but lower the render feedback FPS on the OpenGL viewer.
+// Note that for better OpenGL FPS (and decreased RPR render quality), API user can also tune the `RPR_CONTEXT_PREVIEW` value.
+const int			g_batchSize = 15;
+
+
+// thread rendering 'g_batchSize' iteration(s)
+void renderJob( rpr_context ctxt, GuiRenderImpl::Update* update )
+{
+	CHECK( rprContextRender( ctxt ) );
+	update->m_done = 1;
+	return;
+}
+
+
+void Update()
+{
+	const auto timeUpdateStarts = std::chrono::high_resolution_clock::now();
+
+
+	//
+	// print render stats every ~100 iterations.
+	//
+	if ( g_benchmark_start == g_invalidTime )
+		g_benchmark_start = timeUpdateStarts;
+	if ( g_benchmark_numberOfRenderIteration >= 100 )
+	{
+		double elapsed_time_ms = std::chrono::duration<double, std::milli>(timeUpdateStarts - g_benchmark_start).count();
+		double renderPerSecond = (double)g_benchmark_numberOfRenderIteration * 1000.0 / elapsed_time_ms;
+		std::cout<<renderPerSecond<<" iterations per second."<<std::endl;
+		g_benchmark_numberOfRenderIteration = 0;
+		g_benchmark_start = timeUpdateStarts;
+
+	}
+
+
+	// clear state
+	g_update.clear();
+
+	// start the rendering thread
+	std::thread t( &renderJob, g_context, &g_update );
+
+	// wait the rendering thread
+	while( !g_update.m_done )
+	{
+		// at each update of the rendering thread
+		if( g_update.m_hasUpdate )
+		{
+			// Read the frame buffer from RPR
+			// Note that rprContextResolveFrameBuffer and rprFrameBufferGetInfo(fb,RPR_FRAMEBUFFER_DATA)  can be called asynchronous while rprContextRender is running.
+
+			CHECK( rprContextResolveFrameBuffer( g_context, g_frame_buffer, g_frame_buffer_2, false ) );
+			size_t frame_buffer_dataSize = 0;
+			CHECK( rprFrameBufferGetInfo( g_frame_buffer_2, RPR_FRAMEBUFFER_DATA, 0 , NULL , &frame_buffer_dataSize ) );
+
+			// check that the size fits with original buffer alloc
+			if ( frame_buffer_dataSize != WINDOW_WIDTH * WINDOW_HEIGHT * 4 * sizeof(float) )
+			{
+				CHECK(RPR_ERROR_INTERNAL_ERROR)
+			}
+
+			CHECK( rprFrameBufferGetInfo( g_frame_buffer_2, RPR_FRAMEBUFFER_DATA, frame_buffer_dataSize , g_fbdata.get() , NULL ) );
+
+			// update the OpenGL texture with the new image from RPR
+			glBindTexture(GL_TEXTURE_2D, g_texture);
+			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, GL_RGBA, GL_FLOAT, static_cast<const GLvoid*>(g_fbdata.get()));         
+			glBindTexture(GL_TEXTURE_2D, 0);
+
+			// clear the update flag
+			g_update.m_hasUpdate = false;
+		}
+	
+		// Request a new OpenGL Display call.
+		// Note from documentation: "Multiple calls to glutPostRedisplay before the next display callback opportunity generates only a single redisplay callback".
+		// So we are not actually doing the OpenGL render in this Update loop. It would be a bad design as it would stress this thread and may reduce performance of the 
+		//   `renderJob` thread which is the most important here.
+		glutPostRedisplay();
+	
+	}
+
+	// wait the end of the rendering thread
+	t.join();
+
+	if ( g_askExit )
+	{
+		OnExit();
+		std::exit(EXIT_SUCCESS);
+	}
+
+	g_benchmark_numberOfRenderIteration += g_batchSize;
+
+	return;
+}
+
+void OnMouseMoveEvent(int x, int y)
+{
+	int delaX =  (x - g_mouse_camera.mousePosAtMouseButtonDown_X);
+	int delaY = -(y - g_mouse_camera.mousePosAtMouseButtonDown_Y);
+
+	if ( g_mouse_camera.leftMouseButtonDown )
+	{
+		RadeonProRender::matrix rotZ = RadeonProRender::rotation(g_mouse_camera.up, (float)delaX * 0.001);
+
+		RadeonProRender::float3 lookAtVec = g_mouse_camera.lookat - g_mouse_camera.pos;
+		lookAtVec.normalize();
+
+		RadeonProRender::float3 left = RadeonProRender::cross(g_mouse_camera.up, lookAtVec);
+		left.normalize();
+
+		RadeonProRender::matrix rotleft = RadeonProRender::rotation(left, (float)delaY * 0.001);
+		RadeonProRender::matrix newMat =  rotleft * rotZ * g_mouse_camera.mat ;
+
+		rprCameraSetTransform( g_camera, false, &newMat.m00 );
+	}
+
+	// camera moved, so we need to redraw the framebuffer.
+	CHECK( rprFrameBufferClear(g_frame_buffer) );
+
+	return;
+}
+
+void OnMouseEvent(int button, int state, int x, int y)
+{
+	if ( button ==  GLUT_LEFT_BUTTON )
+	{
+		if ( state == GLUT_DOWN )
+		{
+			g_mouse_camera.leftMouseButtonDown = true;
+
+			rprCameraGetInfo(g_camera,RPR_CAMERA_LOOKAT,sizeof(g_mouse_camera.lookat),&g_mouse_camera.lookat,0);
+			rprCameraGetInfo(g_camera,RPR_CAMERA_UP,sizeof(g_mouse_camera.up),&g_mouse_camera.up,0);
+			rprCameraGetInfo(g_camera,RPR_CAMERA_POSITION,sizeof(g_mouse_camera.pos),&g_mouse_camera.pos,0);
+			rprCameraGetInfo(g_camera,RPR_CAMERA_TRANSFORM,sizeof(g_mouse_camera.mat),&g_mouse_camera.mat,0);
+
+			g_mouse_camera.mousePosAtMouseButtonDown_X = x;
+			g_mouse_camera.mousePosAtMouseButtonDown_Y = y;
+
+		}
+		else if ( state == GLUT_UP )
+		{
+			g_mouse_camera.leftMouseButtonDown = false;
+
+		}
+	}
+
+	return;
+}
+
+void OnKeyboardEvent(unsigned char key, int xmouse, int ymouse)
+{
+	bool cameraMoves = false;
+	switch (key)
+	{
+	case 'w':
+	case 'z':
+	case 's':
+	case 'a':
+	case 'q':
+	case 'd':
+	case 'r':
+	case 'f':
+	{
+		rprCameraGetInfo(g_camera, RPR_CAMERA_LOOKAT, sizeof(g_mouse_camera.lookat), &g_mouse_camera.lookat, 0);
+		rprCameraGetInfo(g_camera, RPR_CAMERA_UP, sizeof(g_mouse_camera.up), &g_mouse_camera.up, 0);
+		rprCameraGetInfo(g_camera, RPR_CAMERA_TRANSFORM, sizeof(g_mouse_camera.mat), &g_mouse_camera.mat, 0);
+		rprCameraGetInfo(g_camera, RPR_CAMERA_POSITION, sizeof(g_mouse_camera.pos), &g_mouse_camera.pos, 0);
+		RadeonProRender::float3 lookAtVec = g_mouse_camera.lookat - g_mouse_camera.pos;
+		lookAtVec.normalize();
+		RadeonProRender::float3 vecRight = RadeonProRender::cross(g_mouse_camera.up, lookAtVec);
+		vecRight.normalize();
+		RadeonProRender::float3 vecUp = g_mouse_camera.up;
+		vecUp.normalize();
+		cameraMoves = true;
+		const float speed = 0.5f;
+		switch (key)
+		{
+		case 'w':
+		case 'z': // for azerty keyboard
+		{
+			g_mouse_camera.pos += lookAtVec * speed;
+			break;
+		}
+		case 's':
+		{
+			g_mouse_camera.pos -= lookAtVec * speed;
+			break;
+		}
+		case 'a':
+		case 'q': // for azerty keyboard
+		{
+			g_mouse_camera.pos += vecRight * speed;
+			break;
+		}
+		case 'd':
+		{
+			g_mouse_camera.pos -= vecRight * speed;
+			break;
+		}
+		case 'r':
+		{
+			g_mouse_camera.pos += vecUp * speed;
+			break;
+		}
+		case 'f':
+		{
+			g_mouse_camera.pos -= vecUp * speed;
+			break;
+		}
+
+		}
+		break;
+	}
+	case 'x':
+	{
+		g_askExit = true;
+		break;
+	}
+	default:
+		break;
+	}
+	if (cameraMoves)
+	{
+		g_mouse_camera.mat.m30 = g_mouse_camera.pos.x;
+		g_mouse_camera.mat.m31 = g_mouse_camera.pos.y;
+		g_mouse_camera.mat.m32 = g_mouse_camera.pos.z;
+		rprCameraSetTransform(g_camera, false, &g_mouse_camera.mat.m00);
+		// camera moved, so we need to redraw the framebuffer.
+		CHECK(rprFrameBufferClear(g_frame_buffer));
+	}
+}
+
+void Display()
+{
+	// Clear backbuffer
+	glClear(GL_COLOR_BUFFER_BIT);
+
+	// Bind vertex & index buffers of a quad
+	glBindBuffer(GL_ARRAY_BUFFER, g_vertex_buffer_id);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_index_buffer_id);
+
+	// Set shaders
+	GLuint program = g_shader_manager.GetProgram("../32_gl_interop/simple");
+	glUseProgram(program);
+
+	// Set texture with the image rendered by FR
+	GLuint texture_loc = glGetUniformLocation(program, "g_Texture");
+	CHECK_GE(texture_loc , 0);
+
+	glUniform1i(texture_loc, 0);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, g_texture);
+	//glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, GL_RGBA, GL_FLOAT, static_cast<const GLvoid*>(g_fbdata));         
+
+	GLuint position_attr_id = glGetAttribLocation(program, "inPosition");
+	GLuint texcoord_attr_id = glGetAttribLocation(program, "inTexcoord");
+
+	glVertexAttribPointer(position_attr_id, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 5, 0);
+	glVertexAttribPointer(texcoord_attr_id, 2, GL_FLOAT, GL_FALSE, sizeof(float) * 5, (void*)(sizeof(float) * 3));
+
+	glEnableVertexAttribArray(position_attr_id);
+	glEnableVertexAttribArray(texcoord_attr_id);
+
+	// Draw quad with the texture on top of it
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, NULL);
+
+	glDisableVertexAttribArray(position_attr_id);
+	glDisableVertexAttribArray(texcoord_attr_id);
+
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	glUseProgram(0);
+
+	// Present backbuffer
+	glutSwapBuffers();
+}
+
+
+void InitGraphics()
+{
+	// Set states
+	glClearColor(0.0, 0.0, 0.0, 1.0);
+	glCullFace(GL_NONE);
+	glDisable(GL_DEPTH_TEST);
+
+	// Viewport
+	glViewport(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+	// Enable texturing
+	glEnable(GL_TEXTURE_2D);
+
+	// Create vertex and index buffer for a quad
+	glGenBuffers(1, &g_vertex_buffer_id);
+	glGenBuffers(1, &g_index_buffer_id);
+
+	glBindBuffer(GL_ARRAY_BUFFER, g_vertex_buffer_id);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_index_buffer_id);
+
+	float quadVertexData[] =
+	{
+		-1, -1, 0.5, 0, 0,
+		1, -1, 0.5, 1, 0,
+		1,  1, 0.5, 1, 1,
+		-1,  1, 0.5, 0, 1
+	};
+
+	GLshort quadIndexData[] =
+	{
+		0, 1, 3,
+		3, 1, 2
+	};
+
+	glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertexData), quadVertexData, GL_STATIC_DRAW);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(quadIndexData), quadIndexData, GL_STATIC_DRAW);
+
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	// Create a texture for FR rendering
+	glActiveTexture(GL_TEXTURE0);
+	glGenTextures(1, &g_texture);
+
+	glBindTexture(GL_TEXTURE_2D, g_texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, WINDOW_WIDTH, WINDOW_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void OnExit()
+{
+	//// Release the stuff we created
+	std::cout <<"Release memory...\n";
+	CHECK(rprObjectDelete(g_camera));g_camera=nullptr;
+	CHECK(rprObjectDelete(g_matsys));g_matsys=nullptr;
+	CHECK(rprObjectDelete(g_frame_buffer));g_frame_buffer=nullptr;
+	CHECK(rprObjectDelete(g_frame_buffer_2));g_frame_buffer_2=nullptr;
+	g_gc.GCClean();
+	CHECK(rprObjectDelete(g_scene));g_scene=nullptr;
+	CheckNoLeak(g_context);
+	CHECK(rprObjectDelete(g_context));g_context=nullptr; // Always delete the RPR Context in last.
+}
+
+/*
+
+__global__ void processKernel(unsigned int atomnum, int n, float* atomposi, unsigned int* indicesList, float* gridVector1, float* gridVector2)
+{
+	// Thread identifiers
+	unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+	unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+	unsigned int z = blockIdx.z * blockDim.z + threadIdx.z;
+
+	// Ensure within grid dimensions
+	if (x < n && y < n && z < n)
+	{
+		for (unsigned int i = 0; i < atomnum; i++)
+		{
+			const int j = i * 3;
+			float radius = sqrtf((x - atomposi[j]) * (x - atomposi[j])
+				+ (y - atomposi[j + 1]) * (y - atomposi[j + 1])
+				+ (z - atomposi[j + 2]) * (z - atomposi[j + 2]));
+
+			if (radius < atomrad)
+			{
+				// NOTE: You cannot directly use push_back() in CUDA.
+				// You might need an atomic operation or preallocated memory to store these values.
+
+				if (radius <= atomrad)
+				{
+					gridVector1[x * n * n + y * n + z] = 1.0f;  // Example of indexing for 3D data
+				}
+				else
+				{
+					gridVector1[x * n * n + y * n + z] = 0.0f;
+				}
+
+				gridVector2[x * n * n + y * n + z] = 1.0f //(float)j / (float)atomnum;
+			}
+		}
+	}
+}
+
+*/
+
+//202310
+std::map<std::string, rpr_creation_flags> creationModesMap = {
+  {"gpu0", RPR_CREATION_FLAGS_ENABLE_GPU0},
+  {"gpu1", RPR_CREATION_FLAGS_ENABLE_GPU1},
+  {"gpu2", RPR_CREATION_FLAGS_ENABLE_GPU2},
+  {"gpu3", RPR_CREATION_FLAGS_ENABLE_GPU3},
+  {"gpu4", RPR_CREATION_FLAGS_ENABLE_GPU4},
+  {"gpu5", RPR_CREATION_FLAGS_ENABLE_GPU5},
+  {"gpu6", RPR_CREATION_FLAGS_ENABLE_GPU6},
+  {"gpu7", RPR_CREATION_FLAGS_ENABLE_GPU7},
+  {"gpu8", RPR_CREATION_FLAGS_ENABLE_GPU8},
+  {"gpu9", RPR_CREATION_FLAGS_ENABLE_GPU9},
+  {"gpu10", RPR_CREATION_FLAGS_ENABLE_GPU10},
+  {"gpu11", RPR_CREATION_FLAGS_ENABLE_GPU11},
+};
+
+std::map<std::string, rpr_render_mode> renderModesMap = {
+{ "gi", RPR_RENDER_MODE_GLOBAL_ILLUMINATION             }  ,
+{ "di", RPR_RENDER_MODE_DIRECT_ILLUMINATION             }  ,
+{ "di_no_shadow", RPR_RENDER_MODE_DIRECT_ILLUMINATION_NO_SHADOW   }  ,
+{ "wire", RPR_RENDER_MODE_WIREFRAME                       }  ,
+{ "mi", RPR_RENDER_MODE_MATERIAL_INDEX                  }  ,
+{ "pos", RPR_RENDER_MODE_POSITION                        }  ,
+{ "normal", RPR_RENDER_MODE_NORMAL                          }  ,
+{ "tex", RPR_RENDER_MODE_TEXCOORD                        }  ,
+{ "ao", RPR_RENDER_MODE_AMBIENT_OCCLUSION               }  ,
+{ "diff", RPR_RENDER_MODE_DIFFUSE                         }  ,
+};
+
+std::map<std::string, rpr_camera_mode> cameraModesMap = {
+	{"perspective", RPR_CAMERA_MODE_PERSPECTIVE},
+	{"orthogrphics", RPR_CAMERA_MODE_ORTHOGRAPHIC},
+	{"longlat360", RPR_CAMERA_MODE_LATITUDE_LONGITUDE_360},
+	{"longlatstereo", RPR_CAMERA_MODE_LATITUDE_LONGITUDE_STEREO},
+	{"cubemap", RPR_CAMERA_MODE_CUBEMAP},
+	{"cubemapstereo", RPR_CAMERA_MODE_CUBEMAP_STEREO},
+	{"fisheye", RPR_CAMERA_MODE_FISHEYE}
+};
+
+template<typename T>
+inline
+void fill(const picojson::object& v, const char* key, T& dst)
+{
+	auto c = v.find(key);
+	if (c != v.end())
+	{
+		const picojson::value& d = c->second;
+		dst = static_cast<T>(d.get<T>());
+	}
+}
+
+template<>
+inline
+void fill(const picojson::object& v, const char* key, RadeonProRender::float3& dst)
+{
+	auto c = v.find(key);
+	if (c != v.end())
+	{
+		int j = 0;
+		const picojson::value& d = c->second;
+		const picojson::array& a = d.get<picojson::array>();
+		for (picojson::array::const_iterator i = a.begin(); i != a.end(); ++i) {
+			dst[j++] = std::stof(i->to_str());
+		}
+
+	}
+}
+
+template<>
+inline
+void fill(const picojson::object& v, const char* key, RadeonProRender::float4& dst)
+{
+	auto c = v.find(key);
+	if (c != v.end())
+	{
+		int j = 0;
+		const picojson::value& d = c->second;
+		const picojson::array& a = d.get<picojson::array>();
+		for (picojson::array::const_iterator i = a.begin(); i != a.end(); ++i) {
+			dst[j++] = std::stof(i->to_str());
+		}
+
+	}
+}
+
+template<>
+inline
+void fill(const picojson::object& v, const char* key, float& dst)
+{
+	auto c = v.find(key);
+	if (c != v.end())
+	{
+		const picojson::value& d = c->second;
+		dst = static_cast<double>(d.get<double>());
+	}
+}
+
+struct ContextSettings
+{
+	rpr_render_mode renderMode = RPR_RENDER_MODE_GLOBAL_ILLUMINATION;
+	rpr_uint recursion = 10;
+	rpr_uint width = 1280;
+	rpr_uint height = 720;
+	rpr_uint iterations = 64;
+	rpr_uint batchSize = 32;
+	std::string outImgFile = "test.png";
+	std::string outJsonFile = "output.json";
+	rpr_uint gui = 0;
+	rpr_creation_flags creationFlags = RPR_CREATION_FLAGS_ENABLE_GPU0;
+};
+
+struct CameraSettings
+{
+	RadeonProRender::float3 position = { 0.0, -1.0, 21.0 };
+	RadeonProRender::float3 aimed = { 0.0f, 0.0f, 0.0f };
+	RadeonProRender::float3 up = { 0.0f, 1.0f, 0.0f };
+	rpr_float focalLength = 75.0f;
+	RadeonProRender::float3 translation = { 0.0f, 0.0f, 0.0f };
+	RadeonProRender::float4 rotation = { 0.0f, 1.0f, 0.0f, 3.14159f };
+	rpr_camera_mode cameraMode = RPR_CAMERA_MODE_PERSPECTIVE;
+};
+
+struct LightSettings
+{
+	std::string type = "point";
+	RadeonProRender::float3 translation = { 0.0f, 1.0f, 0.0f };
+	RadeonProRender::float4 rotation = { 0.0f, 0.0f, 0.0f, 0.0f };
+	RadeonProRender::float3 radiantPower = { 55.0f, 45.0f, 45.0f };
+	rpr_float intensity = 10.0f;
+};
+
+struct EnvLightSettings
+{
+	//Currently we only specify image path but migh add multiple settings here
+	std::string path = "../../Resources/Textures/envLightImage.exr";
+};
+
+struct ShapeSettings
+{
+	std::string name = "cornelBox";
+	std::string path = "../../Resources/Meshes/cornellBox.obj";
+	RadeonProRender::float3 translation = { 0.0f, 0.0f, 0.0f };
+	RadeonProRender::float4 rotation = { 0.0f, 0.0f, 0.0f, 0.0f };
+	RadeonProRender::float3 scale = { 0.0f, 0.0f, 0.0f };
+};
+
+struct Configuration
+{
+	ContextSettings contextSettings;
+	CameraSettings cameraSettings;
+	std::vector<LightSettings> lightSettings;
+	std::vector<ShapeSettings> shapeSettings;
+	std::vector<EnvLightSettings> envLightSettings;
+};
+const ContextSettings parseContextSettings(const picojson::value& config)
+{
+	ContextSettings settings;
+
+	auto context = config.get<picojson::object>();
+
+	std::string renderMode;
+	fill(context, "rendermode", renderMode);
+	settings.renderMode = renderModesMap[renderMode];
+
+	std::string recursion;
+	fill(context, "recursion", recursion);
+	settings.recursion = std::stoi(recursion);
+
+	std::string width;
+	fill(context, "width", width);
+	settings.width = std::stoi(width);
+
+	std::string height;
+	fill(context, "height", height);
+	settings.height = std::stoi(height);
+
+	std::string iterations;
+	fill(context, "iterations", iterations);
+	settings.iterations = std::stoi(iterations);
+
+	std::string batchSize;
+	fill(context, "batchsize", batchSize);
+	settings.batchSize = std::stoi(batchSize);
+
+
+	fill(context, "output", settings.outImgFile);
+	fill(context, "output.json", settings.outJsonFile);
+
+	std::string gui;
+	fill(context, "gui", gui);
+	settings.gui = std::stoi(gui);
+
+	std::string cpu;
+	std::string gpu;
+
+	auto c = context.find("device")->second.get<picojson::object>();
+
+	fill(c, "gpu0", gpu);
+	fill(c, "cpu", cpu);
+
+	if (std::stoi(gpu))
+	{
+		settings.creationFlags = creationModesMap[c.find("gpu0")->first];
+	}
+
+	if (std::stoi(cpu))
+	{
+		settings.creationFlags |= RPR_CREATION_FLAGS_ENABLE_CPU;
+	}
+
+
+#if defined(USING_NORTHSTAR) && defined(__APPLE__) 
+	settings.creationFlags |= RPR_CREATION_FLAGS_ENABLE_METAL; // by default always enable Metal for MacOS
+#endif
+
+	return settings;
+}
+
+const CameraSettings parseCameraSettings(const picojson::value& config)
+{
+	CameraSettings settings;
+
+	auto camera = config.get<picojson::object>();
+
+	fill(camera, "position", settings.position);
+	fill(camera, "aimed", settings.aimed);
+	fill(camera, "up", settings.up);
+	fill(camera, "focal_length", settings.focalLength);
+	fill(camera, "translation", settings.translation);
+	fill(camera, "rotation", settings.rotation);
+
+	std::string cameraMode;
+	fill(camera, "type", cameraMode);
+	settings.cameraMode = cameraModesMap[cameraMode];
+
+	return settings;
+}
+
+const LightSettings parseLightSettings(const picojson::value& config)
+{
+	LightSettings settings;
+
+	auto light = config.get<picojson::object>();
+
+	fill(light, "type", settings.type);
+	fill(light, "translation", settings.translation);
+	fill(light, "rotation", settings.rotation);
+	fill(light, "radiant_power", settings.radiantPower);
+	fill(light, "intensity", settings.intensity);
+
+	return settings;
+}
+
+const EnvLightSettings parseEnvLightSettings(const picojson::value& config)
+{
+	EnvLightSettings e;
+	std::string path;
+
+	auto ibl = config.get<picojson::object>();
+	fill(ibl, "path", path);
+	e.path = path;
+
+	return e;
+}
+
+const ShapeSettings parseShapeSettings(const picojson::value& config)
+{
+	ShapeSettings settings;
+
+	auto obj = config.get<picojson::object>();
+
+	fill(obj, "name", settings.name);
+	fill(obj, "geomObjFile", settings.path);
+	fill(obj, "translation", settings.translation);
+	fill(obj, "rotation", settings.rotation);
+	fill(obj, "scale", settings.scale);
+
+	return settings;
+}
+
+const Configuration loadConfigFile(const char* filepath)
+{
+	std::ifstream i(filepath, std::ios::binary);
+	if (!i.is_open())
+	{
+		std::cout << "Config file " << filepath << " not found." << '\n';
+		std::exit(EXIT_FAILURE);
+	}
+
+	std::size_t sizeInByte = 0;
+	{
+		std::streampos begin = i.tellg();
+		i.seekg(0, std::ios::end);
+		std::streampos end = i.tellg();
+		sizeInByte = end - begin;
+	}
+
+	if (sizeInByte == 0)
+	{
+		std::cout << "Config file" << filepath << "is empty." << '\n';
+		std::cout << "Continue with default configuration .... \n";
+	}
+
+	i.clear();
+	i.seekg(0, std::ios::beg);
+
+	std::vector<char> json;
+	json.resize(sizeInByte);
+	i.read(json.data(), sizeInByte);
+	i.close();
+
+	picojson::value v;
+	std::string err;
+	const char* json_end = picojson::parse(v, json.data(), json.data() + json.size(), &err);
+
+	Configuration config;
+	bool bContext = false;
+	bool bLight = false;
+	bool bCamera = false;
+	bool bIbl = false;
+	bool bShape = false;
+
+	try
+	{
+		if (err.empty())
+		{
+			const picojson::object& o = v.get<picojson::object>();
+
+			for (picojson::object::const_iterator i = o.begin(); i != o.end(); ++i)
+			{
+				if (i->first.find("context") != std::string::npos)
+				{
+					config.contextSettings = parseContextSettings(i->second);
+					bContext = true;
+				}
+				else if (i->first.find("obj") != std::string::npos)
+				{
+					config.shapeSettings.push_back(parseShapeSettings(i->second));
+					bShape = true;
+				}
+				else if (i->first.find("light") != std::string::npos)
+				{
+					config.lightSettings.push_back(parseLightSettings(i->second));
+					bLight = true;
+				}
+				else if (i->first.find("camera") != std::string::npos)
+				{
+					config.cameraSettings = std::move(parseCameraSettings(i->second));
+					bCamera = true;
+				}
+				if (i->first.find("ibl") != std::string::npos)
+				{
+					config.envLightSettings.push_back(parseEnvLightSettings(i->second));
+					bIbl = true;
+				}
+			}
+		}
+	}
+	catch (std::exception&)
+	{
+		std::cout << "\nSyntax error with config file!!!\n";
+		std::exit(EXIT_FAILURE);
+	}
+
+	if (!bContext)
+	{
+		std::cout << "\nNo context defined in config, Initializing default context : \n";
+		std::cout << "Creation Flags     : " << config.contextSettings.creationFlags << '\n';
+		std::cout << "Max Iterations     : " << config.contextSettings.iterations << '\n';
+		std::cout << "GUI Mode           : " << config.contextSettings.gui << '\n';
+		std::cout << "Framebuffer Height : " << config.contextSettings.height << '\n';
+		std::cout << "Framebuffer Width  : " << config.contextSettings.width << '\n';
+		std::cout << "Rendermode         : " << config.contextSettings.renderMode << '\n';
+		std::cout << "Recursion          : " << config.contextSettings.recursion << '\n';
+		std::cout << "Batchsize          : " << config.contextSettings.batchSize << '\n';
+		std::cout << "outImageFile       : " << config.contextSettings.outImgFile << "\n\n";
+	}
+
+	if (!bLight && !bIbl)
+	{
+		EnvLightSettings settings;
+		std::cout << "\nNo lights are defined config, Initializing default Image based lighting :\n";
+		std::cout << "Image based light : " << settings.path << '\n';
+		config.envLightSettings.push_back(settings);
+	}
+
+	if (!bCamera)
+	{
+		std::cout << "\nNo camera defined in config, Initializing default camera : \n";
+		std::cout << "Aimed       :" << config.cameraSettings.aimed << '\n';
+		std::cout << "Position    :" << config.cameraSettings.position << '\n';
+		std::cout << "Rotation    :" << config.cameraSettings.rotation << '\n';
+		std::cout << "Translation :" << config.cameraSettings.translation << '\n';
+		std::cout << "Up          :" << config.cameraSettings.up << '\n';
+		std::cout << "Focal Length:" << config.cameraSettings.focalLength << '\n';
+		std::cout << "Camera Mode :" << config.cameraSettings.cameraMode << "\n\n";
+	}
+
+	if (!bShape)
+	{
+		ShapeSettings settings;
+		std::cout << "\nNo shapes defined in config, Initializing default shape : \n";
+		std::cout << "Name        : " << settings.name << '\n';
+		std::cout << "Path        :" << settings.path << '\n';
+		std::cout << "Rotation    : " << settings.rotation << '\n';
+		std::cout << "Translation : " << settings.translation << '\n';
+		std::cout << "Scale       : " << settings.scale << "\n\n";
+
+		settings.translation = RadeonProRender::float3{ 0.0f, -3.0f, 0.0f };
+		settings.scale = RadeonProRender::float3{ 1.0f, 1.0f, 1.0f };
+		config.shapeSettings.push_back(settings);
+	}
+
+	return config;
+}
+
+
+//202310
+rpr_shape createSphere(float radius) {
+	// ここでは疑似的に球のジオメトリデータを作成します。
+	// 実際には頂点、インデックス、法線などのデータを設定する必要があります。
+	std::vector<float> vertices;
+	std::vector<int> indices;
+	// ... 球のジオメトリデータを作成 ...
+
+	rpr_shape sphere;
+	rprContextCreateMesh(/* ... パラメータにジオメトリデータを渡す ... */, &sphere);
+
+	return sphere;
+}
+void setShapeTransform(rpr_shape shape, const float* matrix) {
+	rprShapeSetTransform(shape, RPR_TRUE, matrix);
+}
+std::vector<float> translateMatrix(float x, float y, float z) {
+	std::vector<float> matrix = {
+		1.0f, 0.0f, 0.0f, x,
+		0.0f, 1.0f, 0.0f, y,
+		0.0f, 0.0f, 1.0f, z,
+		0.0f, 0.0f, 0.0f, 1.0f
+	};
+
+	return matrix;
+}
+
+
+
+int main(int argc, char** argv)
+{
+	//	enable RPR API trace
+	//	set this before any RPR API calls
+	//	rprContextSetParameter1u(0,RPR_CONTEXT_TRACING_ENABLED,1);
+
+
+	//Load config //202310
+	const Configuration config = loadConfigFile("../../tutorials/81_sphere_molecule/sphere.json");
+
+	//GL setup
+	{
+		// Initialize GLUT and GLEW libraries
+		glutInit(&argc, (char**)argv);
+		glutInitWindowSize(WINDOW_WIDTH, WINDOW_HEIGHT);
+		glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
+		glutCreateWindow("gl_interop");
+		GLenum err = glewInit();
+		if (err != GLEW_OK)
+		{
+			std::cout << "GLEW initialization failed\n";
+			return -1;
+		}
+
+		// Set OpenGL states
+		InitGraphics();
+	}
+
+	std::cout << "RPR SDK simple rendering tutorial.\n";
+
+	rpr_int status = RPR_SUCCESS;
+
+	// Register the plugin.
+	rpr_int tahoePluginID = rprRegisterPlugin(RPR_PLUGIN_FILE_NAME); 
+	CHECK_NE(tahoePluginID , -1)
+	rpr_int plugins[] = { tahoePluginID };
+	size_t pluginCount = sizeof(plugins) / sizeof(plugins[0]);
+
+	// Create context using a single GPU 
+	status = rprCreateContext(RPR_API_VERSION, plugins, pluginCount, g_ContextCreationFlags 
+		#ifndef USING_NORTHSTAR   // note that for Northstar, we don't need the GL_INTEROP flag
+		| RPR_CREATION_FLAGS_ENABLE_GL_INTEROP
+		#endif
+		, g_contextProperties, NULL, &g_context);
+	CHECK(status);
+
+	// Set active plugin.
+	CHECK( rprContextSetActivePlugin(g_context, plugins[0]) );
+
+	CHECK( rprContextCreateMaterialSystem(g_context, 0, &g_matsys) );
+
+	std::cout << "Context successfully created.\n";
+
+	// Create a scene
+	CHECK( rprContextCreateScene(g_context, &g_scene) );
+
+	// Create an environment light
+	//CHECK( CreateNatureEnvLight(g_context, g_scene, g_gc, 0.9f) );
+	CHECK(CreateNatureEnvLightIN(g_context, g_scene, g_gc, 0.9f, "../../Resources/Textures/amd.png")); //"../../Resources/Textures/turning_area_4k.hdr"
+
+	// Create camera
+	{
+		CHECK( rprContextCreateCamera(g_context, &g_camera) );
+
+		// Position camera in world space: 
+		CHECK( rprCameraLookAt(g_camera, 0.0f, 5.0f, 20.0f,    0, 1, 0,   0, 1, 0) );
+
+		// set camera field of view
+		CHECK( rprCameraSetFocalLength(g_camera, 30.0f) );
+
+		// Set camera for the scene
+		CHECK( rprSceneSetCamera(g_scene, g_camera) );
+	}
+	// Set scene to render for the context
+	CHECK( rprContextSetScene(g_context, g_scene) );
+
+
+	// create a teapot shape
+	//rpr_shape teapot01 = nullptr;
+	//{
+	//	teapot01 = ImportOBJ("../../Resources/Meshes/teapot.obj",g_scene,g_context);
+	//	g_gc.GCAdd(teapot01);
+	//
+	//	RadeonProRender::matrix m0 = RadeonProRender::rotation_x(MY_PI);
+	//	CHECK(rprShapeSetTransform(teapot01, RPR_TRUE, &m0.m00));
+	//}
+	//
+	//// create the floor
+	//CHECK( CreateAMDFloor(g_context, g_scene, g_matsys, g_gc, 1.0f, 1.0f)  );
+	//
+	// Create material for the teapot
+	//{
+	//	rpr_image uberMat2_img1 = nullptr;
+	//	CHECK(rprContextCreateImageFromFile(g_context,"../../Resources/Textures/lead_rusted_Base_Color.jpg",&uberMat2_img1));
+	//	g_gc.GCAdd(uberMat2_img1);
+	//
+	//	rpr_image uberMat2_img2 = nullptr;
+	//	CHECK(rprContextCreateImageFromFile(g_context,"../../Resources/Textures/lead_rusted_Normal.jpg",&uberMat2_img2));
+	//	g_gc.GCAdd(uberMat2_img2);
+	//
+	//	rpr_material_node uberMat2_imgTexture1 = nullptr;
+	//	CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_IMAGE_TEXTURE,&uberMat2_imgTexture1));
+	//	g_gc.GCAdd(uberMat2_imgTexture1);
+	//	CHECK(rprMaterialNodeSetInputImageDataByKey(uberMat2_imgTexture1,   RPR_MATERIAL_INPUT_DATA  ,uberMat2_img1));
+	//
+	//	rpr_material_node uberMat2_imgTexture2 = nullptr;
+	//	CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_IMAGE_TEXTURE,&uberMat2_imgTexture2));
+	//	g_gc.GCAdd(uberMat2_imgTexture2);
+	//	CHECK(rprMaterialNodeSetInputImageDataByKey(uberMat2_imgTexture2,   RPR_MATERIAL_INPUT_DATA  ,uberMat2_img2));
+	//
+	//	rpr_material_node matNormalMap = nullptr;
+	//	CHECK( rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_NORMAL_MAP,&matNormalMap));
+	//	g_gc.GCAdd(matNormalMap);
+	//	CHECK( rprMaterialNodeSetInputFByKey(matNormalMap,RPR_MATERIAL_INPUT_SCALE,1.0f,1.0f,1.0f,1.0f));
+	//	CHECK( rprMaterialNodeSetInputNByKey(matNormalMap,RPR_MATERIAL_INPUT_COLOR,uberMat2_imgTexture2));
+	//
+	//	rpr_material_node uberMat2 = nullptr;
+	//	CHECK(rprMaterialSystemCreateNode(g_matsys,RPR_MATERIAL_NODE_UBERV2,&uberMat2));
+	//	g_gc.GCAdd(uberMat2);
+	//
+	//	CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_COLOR   ,uberMat2_imgTexture1));
+	//	CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_NORMAL   ,matNormalMap));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_DIFFUSE_WEIGHT    ,1, 1, 1, 1));
+	//
+	//	CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_COLOR  ,uberMat2_imgTexture1));
+	//	CHECK(rprMaterialNodeSetInputNByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_NORMAL   ,matNormalMap));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_WEIGHT  ,1, 1, 1, 1));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ROUGHNESS     ,0, 0, 0, 0));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ANISOTROPY    ,0, 0, 0, 0));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_ANISOTROPY_ROTATION  ,0, 0, 0, 0));
+	//	CHECK(rprMaterialNodeSetInputUByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_MODE   ,RPR_UBER_MATERIAL_IOR_MODE_METALNESS));
+	//	CHECK(rprMaterialNodeSetInputFByKey(uberMat2, RPR_MATERIAL_INPUT_UBER_REFLECTION_IOR   ,1.36, 1.36, 1.36, 1.36));
+	//
+	//	CHECK(rprShapeSetMaterial(teapot01, uberMat2));
+	//}
+
+	//CHECK( rprContextSetParameterByKey1f(g_context, RPR_CONTEXT_DISPLAY_GAMMA , 2.2f ) ); // set display gamma
+
+
+	//20230920
+	//Create material
+	{
+	 	//CHECK(CreateAMDFloor(g_context, g_scene, g_matsys, g_gc, 0.20f, 0.20f, 0.0f, -1.0f, 0.0f));
+		//char pathImageFileA = "../../Resources/Textures/art.jpg";
+		CHECK(CreateAMDFloorIN(g_context, g_scene, g_matsys, g_gc, 0.20f, 0.20f, 0.0f, -2.0f, 0.0f, "../../Resources/Textures/amd.png"));
+
+		rpr_mesh_info mesh_properties[16];
+		mesh_properties[0] = (rpr_mesh_info)RPR_MESH_VOLUME_FLAG;
+		mesh_properties[1] = (rpr_mesh_info)1; // enable the Volume flag for the Mesh
+		mesh_properties[2] = (rpr_mesh_info)0;
+
+		// Volume shapes don't need any vertices data: the bounds of volume will only be defined by the grid.
+		// Also, make sure to enable the RPR_MESH_VOLUME_FLAG
+		rpr_shape cube = 0;
+		CHECK(rprContextCreateMeshEx2(g_context,
+			nullptr, 0, 0,
+			nullptr, 0, 0,
+			nullptr, 0, 0, 0,
+			nullptr, nullptr, nullptr, nullptr, 0,
+			nullptr, 0, nullptr, nullptr, nullptr, 0,
+			mesh_properties,
+			&cube));
+
+		// bounds of volume will always be a box defined by the rprShapeSetTransform
+		RadeonProRender::matrix cubeTransform1 = RadeonProRender::translation(RadeonProRender::float3(0, +0.0f, 0)) * RadeonProRender::rotation_y(0.0f) * RadeonProRender::scale(RadeonProRender::float3(1.0f, 1.0f, 1.0f));
+		CHECK(rprShapeSetTransform(cube, true, &cubeTransform1.m00));
+		CHECK(rprSceneAttachShape(g_scene, cube));
+		// 
+		// define the grids data used by the Volume material.
+		//const size_t n = 128; //128;
+		std::vector<unsigned int> indicesList;
+		std::vector<float> gridVector1;
+		std::vector<float> gridVector2;
+		//const float radiusFadeoutStart = 130.0f;
+		//const float radiusFadeoutEnd   = 130.0f;
+		//for (unsigned int x = 0; x < n; x++)
+		//{
+		//	for (unsigned int y = 0; y < n; y++)
+		//	{
+		//		for (unsigned int z = 0; z < n; z++)
+		//		{
+		//			float radius = sqrtf(((float)x - (float)n / 2.0f) wwwwwwwwwwwwwwwww* ((float)x - (float)n / 2.0f) + ((float)z - (float)n / 2.0f) * ((float)z - (float)n / 2.0f));
+		//			//float radius = sqrtf(((float)x - (float)n / 2.0f) * ((float)x - (float)n / 2.0f) + ((float)y - (float)n / 2.0f) * ((float)y - (float)n / 2.0f) + ((float)z - (float)n / 2.0f) * ((float)z - (float)n / 2.0f));
+		//
+		//			if (radius < radiusFadeoutEnd)
+		//			{
+		//				indicesList.push_back(x);
+		//				indicesList.push_back(y);
+		//				indicesList.push_back(z);
+		//
+		//				// "gridVector1" is going to be a cylinder
+		//				if (radius <= radiusFadeoutStart)
+		//				{
+		//					gridVector1.push_back(1.0f);
+		//				}
+		//				else
+		//				{
+		//					gridVector1.push_back(1.0f - (radius - radiusFadeoutStart) / (radiusFadeoutEnd - radiusFadeoutStart));
+		//				}
+		//
+		//				// "gridVector2" will be a 0->1 ramp along Y-axis
+		//				gridVector2.push_back((float)y / (float)n);
+		//			}
+		//		}
+		//	}
+		//}
+		// 
+		//float atomposi[] = {
+		//	0.1f,0.1f,0.1f,
+		//	0.1f,0.1f,0.2f,
+		//	0.2f,0.1f,0.1f,
+		//	0.5f,0.5f,0.5f,
+		//	0.5f,0.5f,0.6f,
+		//	0.6f,0.5f,0.5f,
+		//};
+		//float atomposi[] = {
+		//	10.0f,10.0f,10.0f,
+		//	10.0f,10.0f,20.0f,
+		//	20.0f,10.0f,10.0f,
+		//	50.0f,50.0f,50.0f,
+		//	50.0f,50.0f,60.0f,
+		//	60.0f,50.0f,50.0f,
+		//};
+		//const int atomnum = sizeof(atomposi) / 3.0f;
+		//const float atomrad = 10.0f;
+
+		////202309
+		//dim3 blockDim(8, 8, 8);  // Example block dimensions
+		//dim3 gridDim((n + blockDim.x - 1) / blockDim.x,
+		//	(n + blockDim.y - 1) / blockDim.y,
+		//	(n + blockDim.z - 1) / blockDim.z);
+		//
+		//processKernel << <gridDim, blockDim >> > (atomnum, n, d_atomposi, d_indicesList, d_gridVector1, d_gridVector2);
+
+		for (unsigned int i = 0; i < atomnum; i++)
+		{
+			for (unsigned int x = 0; x < n; x++)
+			{
+				for (unsigned int y = 0; y < n; y++)
+				{
+					for (unsigned int z = 0; z < n; z++)
+					{
+						const int j = i * 3;
+						float radius = sqrtf(((float)x - (float)atomposi[j]) * ((float)x - (float)atomposi[j])
+									    	+ ((float)y - (float)atomposi[j+1]) * ((float)y - (float)atomposi[j+1])
+									    	+ ((float)z - (float)atomposi[j+2]) * ((float)z - (float)atomposi[j+2]));
+						if (radius < atomrad)
+						{
+							indicesList.push_back(x);
+							indicesList.push_back(y);
+							indicesList.push_back(z);
+		
+							//if (radius <= atomrad)
+							//{
+							//	gridVector1.push_back(1.0f);
+							//}
+							//else
+							//{
+							//	gridVector1.push_back(0.0f);
+							//}
+		
+							gridVector1.push_back(1.0f); 
+							gridVector2.push_back(1.0f);// (float)j / (float)atomnum);
+						}
+					}
+				}
+			}
+		}
+
+		//202310
+		for (const auto& position : sphere_positions) {
+			rpr_shape sphere = createSphere(1);  //raduis
+			float x, y, z;
+			std::tie(x, y, z) = position;
+			setShapeTransform(sphere, translateMatrix(x, y, z));
+			rprSceneAttachShape(g_scene, sphere);
+		}
+
+		// this first grid defines a cylinder
+		rpr_grid rprgrid1 = 0;
+		CHECK(rprContextCreateGrid(g_context, &rprgrid1,
+			n, n, n,
+			&indicesList[0], indicesList.size() / 3, RPR_GRID_INDICES_TOPOLOGY_XYZ_U32,
+			&gridVector1[0], gridVector1.size() * sizeof(gridVector1[0]), 0
+		));
+
+		// GRID_SAMPLER could be compared to a 3d-texture sampler. 
+		// input is a 3d grid,  output is the sampled value from grid
+		rpr_material_node gridSampler1 = NULL;
+		CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler1));
+		CHECK(rprMaterialNodeSetInputGridDataByKey(gridSampler1, RPR_MATERIAL_INPUT_DATA, rprgrid1));
+
+		// This second grid is a gradient along the Y axis.
+		rpr_grid rprgrid2 = 0;
+		CHECK(rprContextCreateGrid(g_context, &rprgrid2,
+			n, n, n,
+			&indicesList[0], indicesList.size() / 3, RPR_GRID_INDICES_TOPOLOGY_XYZ_U32,
+			&gridVector2[0], gridVector2.size() * sizeof(gridVector2[0]), 0
+		));
+
+		// create grid sample for grid2
+		rpr_material_node gridSampler2 = NULL;
+		CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_GRID_SAMPLER, &gridSampler2));
+		CHECK(rprMaterialNodeSetInputGridDataByKey(gridSampler2, RPR_MATERIAL_INPUT_DATA, rprgrid2));
+
+		// create a gradient color texture, here 3 pixels : Red, Green, Blue.
+		// will be used as a lookup output 
+		float rampData2[] = {
+			1.f,0.f,0.f,
+			0.f,1.f,0.f,
+			0.f,0.f,1.f 
+		};
+		rpr_image rampimg2 = 0;
+		rpr_image_desc rampDesc2;
+		rampDesc2.image_width = sizeof(rampData2) / (3 * sizeof(float));
+		rampDesc2.image_height = 1;
+		rampDesc2.image_depth = 0;
+		rampDesc2.image_row_pitch = rampDesc2.image_width * sizeof(rpr_float) * 3;
+		rampDesc2.image_slice_pitch = 0;
+		CHECK(rprContextCreateImage(g_context, { 3, RPR_COMPONENT_TYPE_FLOAT32 }, & rampDesc2, rampData2, & rampimg2));
+
+		// this texture will be used for the color of the volume material.
+		// UV input is the 0->1 gradient created by the scalar grid "rprgrid2".
+		// Output is the red,green,blue texture.
+		// This demonstrates how we can create a lookup table from scalar grid to vector values.
+		rpr_material_node rampSampler2 = NULL;
+		CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_IMAGE_TEXTURE, &rampSampler2));
+		CHECK(rprMaterialNodeSetInputImageDataByKey(rampSampler2, RPR_MATERIAL_INPUT_DATA, rampimg2));
+		CHECK(rprMaterialNodeSetInputNByKey(rampSampler2, RPR_MATERIAL_INPUT_UV, gridSampler2));
+
+		// for ramp texture, it's better to clamp it to edges.
+		CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_U, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
+		CHECK(rprMaterialNodeSetInputUByKey(rampSampler2, RPR_MATERIAL_INPUT_WRAP_V, RPR_IMAGE_WRAP_TYPE_CLAMP_TO_EDGE));
+
+		// create the Volume material
+		rpr_material_node materialVolume = NULL;
+		CHECK(rprMaterialSystemCreateNode(g_matsys, RPR_MATERIAL_NODE_VOLUME, &materialVolume));
+
+		// density is defined by the "cylinder" grid
+		CHECK(rprMaterialNodeSetInputNByKey(materialVolume, RPR_MATERIAL_INPUT_DENSITYGRID, gridSampler1));
+
+		// apply the volume material to the shape.
+		// Note that here we use   rprShapeSetVolumeMaterial  instead of the classic  rprShapeSetMaterial  call.
+		CHECK(rprShapeSetVolumeMaterial(cube, materialVolume));
+
+		// RPR_MATERIAL_INPUT_DENSITY is just a multiplier for DENSITYGRID
+		CHECK(rprMaterialNodeSetInputFByKey(materialVolume, RPR_MATERIAL_INPUT_DENSITY, 100.0f, 0.0f, 0.0f, 0.0f));
+
+		// define the color of the volume
+		CHECK(rprMaterialNodeSetInputNByKey(materialVolume, RPR_MATERIAL_INPUT_COLOR, rampSampler2));
+
+		// more iterations will increase the light penetration inside the volume.
+		CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_MAX_RECURSION, (rpr_uint)2)); // 5
+
+		// when using volumes, we usually need high number of iterations.
+		CHECK(rprContextSetParameterByKey1u(g_context, RPR_CONTEXT_ITERATIONS, 3000));
+
+		// set rendering gamma
+		CHECK(rprContextSetParameterByKey1f(g_context, RPR_CONTEXT_DISPLAY_GAMMA, 2.2f));
+
+
+	}
+
+
+	
+	
+
+
+
+
+
+
+
+
+
+
+	// Create framebuffer to store rendering result
+	rpr_framebuffer_desc desc = { WINDOW_WIDTH,WINDOW_HEIGHT };
+
+	// 4 component 32-bit float value each
+	rpr_framebuffer_format fmt = { 4, RPR_COMPONENT_TYPE_FLOAT32 };
+	CHECK(rprContextCreateFrameBuffer(g_context, fmt, &desc, &g_frame_buffer));
+	CHECK(rprContextCreateFrameBuffer(g_context, fmt, &desc, &g_frame_buffer_2));
+
+	// Set framebuffer for the context
+	CHECK(rprContextSetAOV(g_context, RPR_AOV_COLOR, g_frame_buffer));
+
+	// This line can be added for faster RPR rendering.
+	// The higher RPR_CONTEXT_PREVIEW, the faster RPR rendering, ( but more pixelated ).
+	// 0 = disabled (defaut value)
+	CHECK( rprContextSetParameterByKey1u(g_context,RPR_CONTEXT_PREVIEW, 1u ) );
+
+	// Set framebuffer for the context
+	///CHECK(rprContextSetAOV(g_context, RPR_AOV_COLOR, g_frame_buffer));
+
+	// Define the update callback.
+	// During the rprContextRender execution, RPR will call it regularly
+	// The 'CALLBACK_DATA' : 'g_update' is not used by RPR. it can be any data structure that the API user wants.
+	CHECK(rprContextSetParameterByKeyPtr(g_context, RPR_CONTEXT_RENDER_UPDATE_CALLBACK_FUNC, (void*)GuiRenderImpl::notifyUpdate));
+	CHECK(rprContextSetParameterByKeyPtr(g_context, RPR_CONTEXT_RENDER_UPDATE_CALLBACK_DATA, &g_update));
+
+
+	// do a first rendering iteration, just for to force scene/cache building.
+	std::cout << "Cache and scene building... ";
+	CHECK(rprContextSetParameterByKey1u(g_context,RPR_CONTEXT_ITERATIONS,1));
+	CHECK( rprContextRender( g_context ) );
+	std::cout << "done\n";
+
+	// each rprContextRender call will do `g_batchSize` iterations. 
+	// Note that calling rprContextRender 1 time with RPR_CONTEXT_ITERATIONS = `g_batchSize` is faster than calling rprContextRender `g_batchSize` times with RPR_CONTEXT_ITERATIONS = 1
+	CHECK(rprContextSetParameterByKey1u(g_context,RPR_CONTEXT_ITERATIONS,g_batchSize));
+
+	// allocate the data that will be used the read RPR framebuffer, and give it to OpenGL.
+	g_fbdata = std::shared_ptr<float>(new float[WINDOW_WIDTH * WINDOW_HEIGHT * 4], std::default_delete<float[]>());
+
+	std::cout << "Press W or S to move the camera.\n";
+
+	glutDisplayFunc(Display);
+	glutIdleFunc(Update);
+	glutKeyboardFunc(OnKeyboardEvent);
+	glutMouseFunc(OnMouseEvent);
+	glutMotionFunc(OnMouseMoveEvent);
+	glutMainLoop();
+
+
+	// this should be called when the OpenGL Application closes
+	// ( note that it may not be called, as GLUT doesn't have "Exit" callback - press X key in order to have a cleaned exit )
+	OnExit();
+
+
+	return 0;
+}
+
+
+

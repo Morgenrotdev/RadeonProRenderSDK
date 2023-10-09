@@ -109,6 +109,7 @@ solution "Tutorials"
  	include "63_hybrid"
     include "64_mesh_obj_demo"
 	include "80_gl_interop_molecule"
+	include "81_sphere_molecule"
 	include "85_gl_interop_surface"
 	include "99_test"
 
