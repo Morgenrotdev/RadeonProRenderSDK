@@ -198,8 +198,8 @@ struct ContextSettings
 {
 	rpr_render_mode renderMode = RPR_RENDER_MODE_GLOBAL_ILLUMINATION;
 	rpr_uint recursion = 10;
-	rpr_uint width = 1280;
-	rpr_uint height = 720;
+	rpr_uint width =  1280;//1920
+	rpr_uint height =  720;//1080
 	rpr_uint iterations = 64;
 	rpr_uint batchSize = 32;
 	std::string outImgFile = "test.png";
@@ -660,19 +660,27 @@ void loadTexture(rpr_context& context, rpr_material_node mat, std::string textur
 }
 
 
-
-//202310_LAMMPS_dumpfile_reading
+//-------------**************-------------------------
+//202310_LAMMPS_GROMACS
 struct AtomData {
 	int num;
 	int type;
+	std::string typen, molname;
 	double x, y, z;
 };
 
+const int AtomDataType = 20; //10:LAMMPS, 20:GROMACS
+const int WatVanish = 1; //for GROMACS, 1:ON, 0:OFF
+
 std::vector<AtomData> extractAtomData() {
-	//const std::string filename = "./dump.lammpstrj_ionliquid_test10"; 
-	const std::string filename = "./dump.lammpstrj_ionliquid_1000";
-	//const std::string filename = "//wsl.localhost/Ubuntu-20.04/home/hito/Material/dump.lammpstrj_ionliquid_27000";
-	//const std::string filename = "//wsl.localhost/Ubuntu-20.04/home/hito/Material/dump.lammpstrj_ionliquid_125000";
+
+	//const std::string filename = "../89_sample_data/dump.lammpstrj_ionliquid_test10"; 
+	//const std::string filename = "../89_sample_data/dump.lammpstrj_ionliquid_1000";
+	//const std::string filename = "../89_sample_data/dump.lammpstrj_ionliquid_27000";
+	//const std::string filename = "../89_sample_data/dump.lammpstrj_ionliquid_125000";
+	//const std::string filename = "../89_sample_data/md_0_1_1M_test100.gro";
+	//const std::string filename = "../89_sample_data/md_0_1_1M_test111.gro";
+	const std::string filename = "../89_sample_data/md_0_1_1M.gro";
 
 	std::ifstream file(filename);
 	if (!file.is_open()) {
@@ -685,31 +693,88 @@ std::vector<AtomData> extractAtomData() {
 	bool readAtoms = false;
 	std::vector<AtomData> data;
 
-	while (std::getline(file, line)) {
-		if (line == "ITEM: NUMBER OF ATOMS") {
-			file >> numberOfAtoms;
-			data.reserve(numberOfAtoms);
-		}
-		else if (line == "ITEM: ATOMS id mol type element q xu yu zu") {
-			readAtoms = true;
-			continue;  // Skip header line
-		}
+	//LAMMPS
+	if (AtomDataType == 10) {
+		while (std::getline(file, line)) {
+			if (line == "ITEM: NUMBER OF ATOMS") {
+				file >> numberOfAtoms;
+				data.reserve(numberOfAtoms);
+			}
+			else if (line == "ITEM: ATOMS id mol type element q xu yu zu") {
+				readAtoms = true;
+				continue;  // Skip header line
+			}
 
-		if (readAtoms && numberOfAtoms > 0) {
-			AtomData atom;
-			int id, mol;
-			std::string element;
-			double q;
-			std::istringstream iss(line);
-			iss >> id >> mol >> atom.type >> element >> q >> atom.x >> atom.y >> atom.z;
-			atom.num = numberOfAtoms;
-			data.push_back(atom);
-			numberOfAtoms--;
+			if (readAtoms && numberOfAtoms > 0) {
+				AtomData atom;
+				int id, mol;
+				std::string element;
+				double q;
+				std::istringstream iss(line);
+				iss >> id >> mol >> atom.type >> element >> q >> atom.x >> atom.y >> atom.z;
+				atom.num = numberOfAtoms;
+				data.push_back(atom);
+				numberOfAtoms--;
+			}
 		}
+	}
+	//GROMACS
+	else if (AtomDataType == 20) {
+		while (std::getline(file, line)) {
+			if (line == "Generic title") {
+				std::getline(file, line);  
+				std::istringstream iss(line);
+				iss >> numberOfAtoms;
+				std::cout << "reading gromacs file, be: " << numberOfAtoms << '\n';
+				data.reserve(numberOfAtoms);
+				readAtoms = true;
+				continue;  // Skip header line
+			}
+	
+			if (readAtoms && numberOfAtoms > 0) {
+				AtomData atom;
+				int molid, id;
+				//std::string molname;
+				double vx, vy, vz;
+				std::istringstream iss(line);
+
+				iss >> molid >> atom.molname;
+				char typen[8];       // 
+				iss.read(typen, 7);  // 
+				typen[7] = '\0';     // null
+				atom.typen = typen;  
+				iss >> id >> atom.x >> atom.y >> atom.z >> vx >> vy >> vz;
+
+				//iss >> molid >> molname >> atom.typen >> id >> atom.x >> atom.y >> atom.z >> vx >> vy >> vz;
+
+				atom.num = numberOfAtoms;
+				data.push_back(atom);
+				numberOfAtoms--;
+
+				//std::cout << "reading gromacs file, molid: " << molid 
+				//	<< "  molname: " << atom.molname
+				//	<< "  typen: " << atom.typen << '\n';
+			}
+		}
+	}
+	else {
+		std::cout << "ERROR : No simulation format is detected." << '\n';
 	}
 
 	return data;
 }
+
+
+//GROMACS, for charactor finding
+std::string trim(const std::string& str) {
+	size_t first = str.find_first_not_of(" \t");
+	if (std::string::npos == first) {
+		return "";
+	}
+	size_t last = str.find_last_not_of(" \t");
+	return str.substr(first, (last - first + 1));
+}
+//-------------**************-------------------------
 
 
 
@@ -888,9 +953,11 @@ void loadAndAttachShapes(rpr_context& context, rpr_scene& scene, rpr_material_sy
 			//RadeonProRender::matrix m = RadeonProRender::translation(settings.translation) * RadeonProRender::scale(settings.scale);
 			//CHECK(rprShapeSetTransform(t_shape, RPR_TRUE, &m.m00));
 
-			float atom_shift_x = -2.5f;
-			float atom_shift_y = -2.0f;
-			float atom_shift_z = 0.0f;
+			//-------------**************-------------------------
+			float atom_shift_x = -5.0f; //-2.5f; //lammps
+			float atom_shift_y = -5.0f; //-2.0f;
+			float atom_shift_z = 0.0f; // 0.0f;
+
 			RadeonProRender::matrix m = RadeonProRender::translation({
 							(float)atoms[i].x * 0.1f + atom_shift_x, (float)atoms[i].y * 0.1f + atom_shift_y, (float)atoms[i].z * 0.1f + atom_shift_z })
 							* RadeonProRender::scale(settings.scale * 10.0f);
@@ -937,19 +1004,28 @@ void loadAndAttachShapes(rpr_context& context, rpr_scene& scene, rpr_material_sy
 			rprMaterialNodeSetInputFByKey(diffuseMaterial_bw, RPR_MATERIAL_INPUT_COLOR, color_bw[0], color_bw[1], color_bw[2], color_bw[3]);
 
 
-			std::cout << "atom's size: " << atoms.size() << std::endl;
-			std::cout << "10th atom's num: " << atoms[9].num << std::endl;
-			std::cout << "10th atom's type: " << atoms[9].type << std::endl;
-			std::cout << "10th atom's x: " << atoms[9].x << std::endl;
-			std::cout << "10th atom's y: " << atoms[9].y << std::endl;
-			std::cout << "10th atom's z: " << atoms[9].z << std::endl;
+			//std::cout << "atom's size: " << atoms.size() << std::endl;
+			//std::cout << "10th atom's num: " << atoms[9].num << std::endl;
+			//std::cout << "10th atom's type: " << atoms[9].type << std::endl;
+			//std::cout << "10th atom's x: " << atoms[9].x << std::endl;
+			//std::cout << "10th atom's y: " << atoms[9].y << std::endl;
+			//std::cout << "10th atom's z: " << atoms[9].z << std::endl;
 
-			//ionic liquid
+			//LAMMPS, ionic liquid
 			//1N 2C 3C 4C 5H 6C 7H 8H 9C 10H 11CL
-			std::unordered_set<int> valid_nums_H = { 5, 7, 8, 10 };
-			std::unordered_set<int> valid_nums_C = { 2, 3, 4, 6, 9 };
-			std::unordered_set<int> valid_nums_N = { 1 };
-			std::unordered_set<int> valid_nums_CL = { 11 };
+			std::unordered_set<int> valid_num_H = { 5, 7, 8, 10 };
+			std::unordered_set<int> valid_num_C = { 2, 3, 4, 6, 9 };
+			std::unordered_set<int> valid_num_N = { 1 };
+			std::unordered_set<int> valid_num_CL = { 11 };
+
+			//GROMACS, 1M
+			std::unordered_set<std::string> valid_name_H = { "H","H1","H2","H3", "HA", "HA2", "HA3", "HB", "HB1", "HB2", "HB3", "HD1", "HD11", "HD12", "HD13", "HD2", "HD21", "HD22", "HD23", "HD3", "HE", "HE1", "HE2", "HE21", "HE22", "HE3", "HG", "HG1", "HG11", "HG12", "HG13", "HG2", "HG21", "HG22", "HG23", "HG3", "HH", "HH11", "HH12", "HH2", "HH21", "HH22", "HZ", "HZ1", "HZ2", "HZ3"};
+			std::unordered_set<std::string> valid_name_C = { "C","CA","CB","CD","CD1","CD2","CE","CE1","CE2","CE3","CG","CG1","CG2","CH2","CZ","CZ2","CZ3" };
+			std::unordered_set<std::string> valid_name_N = { "N","ND1","ND2","NE","NE1","NE2","NH1","NH2","NZ" };
+			std::unordered_set<std::string> valid_name_O = { "O","OD1","OD2","OE1","OE2","OG","OG1","OH","OXT" };
+			std::unordered_set<std::string> valid_name_S = { "SD","SG"};
+			std::unordered_set<std::string> valid_name_CL = {"Cl","Cl-" };
+			std::unordered_set<std::string> vanish_mol_name = { "WAT" };
 
 			//if (done == 1)
 			if (done == 0)
@@ -987,38 +1063,91 @@ void loadAndAttachShapes(rpr_context& context, rpr_scene& scene, rpr_material_sy
 					//RadeonProRender::matrix m = RadeonProRender::translation({ (float)atoms[i].x * 0.1f, (float)atoms[i].y * 0.1f, (float)atoms[i].z * 0.1f })
 					//	* RadeonProRender::scale(settings.scale * 0.05f);
 					//rprShapeSetTransform(s, RPR_TRUE, &m.m00);
-					if (valid_nums_H.find((int)atoms[i].type) != valid_nums_H.end()) {
-						rprShapeSetMaterial(s, diffuseMaterial_bw);
-						atom_size = 0.04f;
+
+					//LAMMPS
+					if (AtomDataType == 10) {
+						if (valid_num_H.find((int)atoms[i].type) != valid_num_H.end()) {
+							rprShapeSetMaterial(s, diffuseMaterial_bw);
+							atom_size = 0.04f;
+						}
+						else if (valid_num_C.find((int)atoms[i].type) != valid_num_C.end()) {
+							rprShapeSetMaterial(s, diffuseMaterial_gr);
+							atom_size = 0.08f;
+						}
+						else if (valid_num_N.find((int)atoms[i].type) != valid_num_N.end()) {
+							rprShapeSetMaterial(s, diffuseMaterial_b);
+							atom_size = 0.08f;
+						}
+						else if (valid_num_CL.find((int)atoms[i].type) != valid_num_CL.end()) {
+							rprShapeSetMaterial(s, diffuseMaterial_lg);
+							atom_size = 0.12f;
+						}
+						else {
+							rprShapeSetMaterial(s, diffuseMaterial_r);
+							std::cout << "RED atom's type: " << (int)atoms[i].type << std::endl;
+							atom_size = 0.1f;
+						}
+						RadeonProRender::matrix m = RadeonProRender::translation({
+							(float)atoms[i].x * 0.1f + atom_shift_x, (float)atoms[i].y * 0.1f + atom_shift_y, (float)atoms[i].z * 0.1f + atom_shift_z })
+							* RadeonProRender::scale(settings.scale * atom_size);
+						rprShapeSetTransform(s, RPR_TRUE, &m.m00);
+						rprSceneAttachShape(scene, s);
 					}
-					else if (valid_nums_C.find((int)atoms[i].type) != valid_nums_C.end()) {
-						rprShapeSetMaterial(s, diffuseMaterial_gr);
-						atom_size = 0.08f;
+					//GROMACS
+					else if (AtomDataType == 20) {
+						if (((WatVanish == 1)&&(vanish_mol_name.find(atoms[i].molname) == vanish_mol_name.end()))
+							||(WatVanish != 1)) {
+
+							std::string trimmedType = trim(atoms[i].typen);
+							if (valid_name_H.find(trimmedType) != valid_name_H.end()) {
+								rprShapeSetMaterial(s, diffuseMaterial_bw);
+								atom_size = 0.04f;
+							}
+							else if (valid_name_C.find(trimmedType) != valid_name_C.end()) {
+								rprShapeSetMaterial(s, diffuseMaterial_gr);
+								atom_size = 0.08f;
+							}
+							else if (valid_name_O.find(trimmedType) != valid_name_O.end()) {
+								rprShapeSetMaterial(s, diffuseMaterial_r);
+								atom_size = 0.08f;
+							}
+							else if (valid_name_N.find(trimmedType) != valid_name_N.end()) {
+								rprShapeSetMaterial(s, diffuseMaterial_b);
+								atom_size = 0.08f;
+							}
+							else if (valid_name_S.find(trimmedType) != valid_name_S.end()) {
+								rprShapeSetMaterial(s, diffuseMaterial_go);
+								atom_size = 0.08f;
+							}
+							else if (valid_name_CL.find(trimmedType) != valid_name_CL.end()) {
+								rprShapeSetMaterial(s, diffuseMaterial_lg);
+								atom_size = 0.12f;
+							}
+							else {
+								rprShapeSetMaterial(s, diffuseMaterial_g);
+								std::cout << "GREEN atom's id: " << (int)i << " typen: " << atoms[i].typen << std::endl;
+								atom_size = 0.1f;
+							}
+							RadeonProRender::matrix m = RadeonProRender::translation({
+								(float)atoms[i].x * 0.5f + atom_shift_x, (float)atoms[i].y * 0.5f + atom_shift_y, (float)atoms[i].z * 0.5f + atom_shift_z })
+								* RadeonProRender::scale(settings.scale * atom_size);
+							rprShapeSetTransform(s, RPR_TRUE, &m.m00);
+							rprSceneAttachShape(scene, s);
+						}
 					}
-					else if (valid_nums_N.find((int)atoms[i].type) != valid_nums_N.end()) {
-						rprShapeSetMaterial(s, diffuseMaterial_b);
-						atom_size = 0.08f;
+					else 
+					{
+						std::cout << "ERROR : No simulation model is detected " << std::endl;
 					}
-					else if (valid_nums_CL.find((int)atoms[i].type) != valid_nums_CL.end()) {
-						rprShapeSetMaterial(s, diffuseMaterial_lg);
-						atom_size = 0.12f;
-					}
-					else {
-						rprShapeSetMaterial(s, diffuseMaterial_r);
-						std::cout << "RED atom's type: " << (int)atoms[i].type << std::endl;
-						atom_size = 0.1f;
-					}
-					RadeonProRender::matrix m = RadeonProRender::translation({
-						(float)atoms[i].x * 0.1f + atom_shift_x, (float)atoms[i].y * 0.1f + atom_shift_y, (float)atoms[i].z * 0.1f + atom_shift_z })
-						* RadeonProRender::scale(settings.scale * atom_size);
-					rprShapeSetTransform(s, RPR_TRUE, &m.m00);
-					rprSceneAttachShape(scene, s);
 				}
 			}
 			done++;
 			//202310_END
 
 		}
+		//-------------**************-------------------------
+
+
 
 
 		// Avoid applying material to per face
