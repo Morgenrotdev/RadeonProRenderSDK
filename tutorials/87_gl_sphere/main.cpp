@@ -53,6 +53,8 @@
 #include <memory>
 #include <map>
 #include <unordered_set> //202310
+#include <chrono> //202310
+
 
 
 GLuint              g_vertex_buffer_id = 0;
@@ -564,27 +566,61 @@ Context createContext(const ContextSettings settings)
 }
 
 
+//void createAndAttachCamera(rpr_context& context, rpr_scene& scene, const CameraSettings& settings)
+//{
+//	// ToDo: add code to create other types of cameras
+//	rpr_camera camera = nullptr;
+//
+//	if (settings.cameraMode & RPR_CAMERA_MODE_PERSPECTIVE)
+//	{
+//		CHECK(rprContextCreateCamera(context, &camera));
+//
+//		CHECK(rprCameraLookAt(camera, settings.position.x, settings.position.y, settings.position.z,
+//			settings.aimed.x, settings.aimed.y, settings.aimed.z,
+//			settings.up.x, settings.up.y, settings.up.z));
+//
+//		CHECK(rprCameraSetFocalLength(camera, settings.focalLength));
+//
+//		CHECK(rprCameraSetMode(camera, settings.cameraMode));
+//
+//		CHECK(rprSceneSetCamera(scene, camera));
+//	}
+//
+//	garbageCollector.push_back(camera);
+//}
+//202310
 void createAndAttachCamera(rpr_context& context, rpr_scene& scene, const CameraSettings& settings)
 {
 	// ToDo: add code to create other types of cameras
-	rpr_camera camera = nullptr;
-
+	//rpr_camera camera = nullptr;
 	if (settings.cameraMode & RPR_CAMERA_MODE_PERSPECTIVE)
 	{
-		CHECK(rprContextCreateCamera(context, &camera));
-
-		CHECK(rprCameraLookAt(camera, settings.position.x, settings.position.y, settings.position.z,
+		CHECK(rprContextCreateCamera(context, &g_camera));
+		CHECK(rprCameraLookAt(g_camera, settings.position.x, settings.position.y, settings.position.z,
+			settings.aimed.x, settings.aimed.y, settings.aimed.z,
+			settings.up.x, settings.up.y, settings.up.z));
+		CHECK(rprCameraSetFocalLength(g_camera, settings.focalLength));
+		CHECK(rprCameraSetMode(g_camera, settings.cameraMode));
+		CHECK(rprSceneSetCamera(scene, g_camera));
+	}
+	garbageCollector.push_back(g_camera);
+}
+void createAndAttachCamera2(rpr_context& context, rpr_scene& scene, const CameraSettings& settings)
+{
+	// ToDo: add code to create other types of cameras
+	//rpr_camera camera = nullptr;
+	if (settings.cameraMode & RPR_CAMERA_MODE_PERSPECTIVE)
+	{
+		CHECK(rprContextCreateCamera(context, &g_camera));
+		CHECK(rprCameraLookAt(g_camera, settings.position.x, settings.position.y, settings.position.z,
 			settings.aimed.x, settings.aimed.y, settings.aimed.z,
 			settings.up.x, settings.up.y, settings.up.z));
 
-		CHECK(rprCameraSetFocalLength(camera, settings.focalLength));
-
-		CHECK(rprCameraSetMode(camera, settings.cameraMode));
-
-		CHECK(rprSceneSetCamera(scene, camera));
+		CHECK(rprCameraSetFocalLength(g_camera, settings.focalLength));
+		CHECK(rprCameraSetMode(g_camera, settings.cameraMode));
+		CHECK(rprSceneSetCamera(scene, g_camera));
 	}
-
-	garbageCollector.push_back(camera);
+	garbageCollector.push_back(g_camera);
 }
 
 void createAndAttachLight(rpr_context& context, rpr_scene& scene, const LightSettings& settings)
@@ -665,6 +701,7 @@ void loadTexture(rpr_context& context, rpr_material_node mat, std::string textur
 struct AtomData {
 	int num;
 	int type;
+	int id;
 	std::string typen, molname;
 	double x, y, z;
 };
@@ -672,17 +709,21 @@ struct AtomData {
 const int AtomDataType = 20; //10:LAMMPS, 20:GROMACS
 const int WatVanish = 1; //for GROMACS, 1:ON, 0:OFF
 
+std::vector<AtomData> OriginalAtoms;
+std::vector<AtomData> CurrentAtoms;
+
 std::vector<AtomData> extractAtomData() {
 
-	//const std::string filename = "../89_sample_data/dump.lammpstrj_ionliquid_test10"; 
-	//const std::string filename = "../89_sample_data/dump.lammpstrj_ionliquid_1000";
-	//const std::string filename = "../89_sample_data/dump.lammpstrj_ionliquid_27000";
-	//const std::string filename = "../89_sample_data/dump.lammpstrj_ionliquid_125000";
-	//const std::string filename = "../89_sample_data/md_0_1_1M_test100.gro";
-	//const std::string filename = "../89_sample_data/md_0_1_1M_test111.gro";
-	const std::string filename = "../89_sample_data/md_0_1_1M.gro";
+	//const std::string SimFileName = "../89_sample_data/dump.lammpstrj_ionliquid_test10"; 
+	//const std::string SimFileName = "../89_sample_data/dump.lammpstrj_ionliquid_27000";
+	//const std::string SimFileName = "../89_sample_data/dump.lammpstrj_ionliquid_125000";
+	//const std::string SimFileName = "../89_sample_data/dump.lammpstrj_ionliquid_1000";
+	//const std::string SimFileName = "../89_sample_data/dump.lammpstrj_Ionic_555";
+	//const std::string SimFileName = "../89_sample_data/md_0_1_1M_test100.gro";
+	//const std::string SimFileName = "../89_sample_data/md_0_1_1M_test111.gro";
+	const std::string SimFileName = "../89_sample_data/md_0_1_1M.gro";
 
-	std::ifstream file(filename);
+	std::ifstream file(SimFileName);
 	if (!file.is_open()) {
 		std::cerr << "Failed to open the file." << std::endl;
 		exit(1);
@@ -707,19 +748,22 @@ std::vector<AtomData> extractAtomData() {
 
 			if (readAtoms && numberOfAtoms > 0) {
 				AtomData atom;
-				int id, mol;
+				int dummy, mol;
 				std::string element;
 				double q;
 				std::istringstream iss(line);
-				iss >> id >> mol >> atom.type >> element >> q >> atom.x >> atom.y >> atom.z;
+				iss >> atom.id >> mol >> atom.type >> element >> q >> atom.x >> atom.y >> atom.z;
 				atom.num = numberOfAtoms;
 				data.push_back(atom);
 				numberOfAtoms--;
+				CurrentAtoms.push_back(atom);
+				OriginalAtoms.push_back(atom);
 			}
 		}
 	}
 	//GROMACS
 	else if (AtomDataType == 20) {
+		int lineNumber = 1;
 		while (std::getline(file, line)) {
 			if (line == "Generic title") {
 				std::getline(file, line);  
@@ -747,23 +791,41 @@ std::vector<AtomData> extractAtomData() {
 
 				//iss >> molid >> molname >> atom.typen >> id >> atom.x >> atom.y >> atom.z >> vx >> vy >> vz;
 
+				atom.id = (int)lineNumber; //
 				atom.num = numberOfAtoms;
 				data.push_back(atom);
 				numberOfAtoms--;
+				lineNumber++; //
 
 				//std::cout << "reading gromacs file, molid: " << molid 
 				//	<< "  molname: " << atom.molname
 				//	<< "  typen: " << atom.typen << '\n';
+				CurrentAtoms.push_back(atom);
+				OriginalAtoms.push_back(atom);
 			}
 		}
 	}
 	else {
 		std::cout << "ERROR : No simulation format is detected." << '\n';
 	}
-
 	return data;
 }
 
+void printCurrentAtoms() {
+	for (const AtomData& atom : CurrentAtoms) {
+		std::cout << "printCurrentAtoms \n" << std::endl;
+		if (AtomDataType == 10) {
+			std::cout << "num: " << atom.num << ", id: " << atom.id << ", type: " << atom.type \
+				<< ", x: " << atom.x << ", y: " << atom.y << ", z: " << atom.z \
+				<< std::endl;
+		}
+		else if (AtomDataType == 20) {
+			std::cout << "num: " << atom.num << ", id: " << atom.id << ", typen: " << atom.typen \
+				<< ", x: " << atom.x << ", y: " << atom.y << ", z: " << atom.z \
+				<< std::endl;
+		}
+	}
+}
 
 //GROMACS, for charactor finding
 std::string trim(const std::string& str) {
@@ -774,9 +836,39 @@ std::string trim(const std::string& str) {
 	size_t last = str.find_last_not_of(" \t");
 	return str.substr(first, (last - first + 1));
 }
+
+double getCurrentTimeInSeconds() {
+	static const auto start_time = std::chrono::steady_clock::now();
+	auto current_time = std::chrono::steady_clock::now();
+	auto duration = current_time - start_time;
+	return std::chrono::duration<double>(duration).count();
+}
+
+void updateAtoms(rpr_context& context, rpr_scene& scene) {
+
+	double CurrentTime = getCurrentTimeInSeconds();
+
+	//rpr_shape t_shape = nullptr; 
+	//{
+	//	rpr_shape s;
+	//	auto e = rprContextCreateInstance(context, t_shape, &s);
+	//	CHECK(rprSceneAttachShape(scene, t_shape));
+	//
+	//	for (int i = 0; i < CurrentAtoms.size(); ++i) {
+	//		//CurrentAtoms[i].x = CurrentAtoms[i].x * 0.5f;
+	//		RadeonProRender::matrix m = RadeonProRender::translation({
+	//		(float)CurrentAtoms[i].x * 0.1f, (float)CurrentAtoms[i].y * 0.1f, (float)CurrentAtoms[i].z * 0.1f });
+	//		//* RadeonProRender::scale(settings.scale * atom_size);
+	//
+	//		rprShapeSetTransform(s, RPR_TRUE, &m.m00);
+	//		rprSceneAttachShape(scene, s);
+	//	}
+	//}
+	std::cout << "Current time in seconds: " << CurrentTime << std::endl;
+}
+
+
 //-------------**************-------------------------
-
-
 
 
 //void loadAndAttachShapes(rpr_context& context, rpr_scene& scene, rpr_material_system matsys, const ShapeSettings& settings)
@@ -954,8 +1046,8 @@ void loadAndAttachShapes(rpr_context& context, rpr_scene& scene, rpr_material_sy
 			//CHECK(rprShapeSetTransform(t_shape, RPR_TRUE, &m.m00));
 
 			//-------------**************-------------------------
-			float atom_shift_x = -5.0f; //-2.5f; //lammps
-			float atom_shift_y = -5.0f; //-2.0f;
+			float atom_shift_x = -2.5f; //-2.5f; //lammps
+			float atom_shift_y = -2.0f; //-2.0f;
 			float atom_shift_z = 0.0f; // 0.0f;
 
 			RadeonProRender::matrix m = RadeonProRender::translation({
@@ -1145,6 +1237,7 @@ void loadAndAttachShapes(rpr_context& context, rpr_scene& scene, rpr_material_sy
 			//202310_END
 
 		}
+
 		//-------------**************-------------------------
 
 
@@ -1283,6 +1376,9 @@ void printHelp()
 //const unsigned int WINDOW_HEIGHT = 60*10;
 const unsigned int WINDOW_WIDTH = 1280;
 const unsigned int WINDOW_HEIGHT = 720;
+//const unsigned int WINDOW_WIDTH = 1920;
+//const unsigned int WINDOW_HEIGHT = 1080;
+
 
 void Display();
 void OnExit();
@@ -1657,6 +1753,9 @@ void OnKeyboardEvent(unsigned char key, int xmouse, int ymouse)
 
 void Display()
 {
+	//202311
+	updateAtoms(g_context, g_scene);
+
 	// Clear backbuffer
 	glClear(GL_COLOR_BUFFER_BIT);
 
@@ -1823,7 +1922,13 @@ int main(int argc, char** argv)
 	std::cout << "\nContext Successfully create!.\n";
 
 	// Create and attach camerato scene
-	createAndAttachCamera(context, scene, config.cameraSettings);
+	//createAndAttachCamera(context, scene, config.cameraSettings);
+	//202310
+	std::cout << "CameraPosi: " << config.cameraSettings.position.x
+		<< " " << config.cameraSettings.position.y << " " << config.cameraSettings.position.z << " \n";
+	std::cout << "AimedPosi: " << config.cameraSettings.aimed.x
+		<< " " << config.cameraSettings.aimed.y << " " << config.cameraSettings.aimed.z << " \n";
+	createAndAttachCamera2(context, scene, config.cameraSettings);
 
 	rpr_material_system matsys = nullptr;
 	CHECK(rprContextCreateMaterialSystem(context, 0, &matsys));
@@ -1838,6 +1943,7 @@ int main(int argc, char** argv)
 	std::cout << "input_roughness  " << g_input_roughness << std::endl;
 	//202310
 	std::vector<AtomData> atoms = extractAtomData();
+	//printCurrentAtoms();
 	//-------------------------************************--------------------------------------
 
 	// Load models from config file and attach them to scene
